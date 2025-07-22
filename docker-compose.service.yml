@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  sip-gateway:
+    image: ${DOCKER_REGISTRY:-ghcr.io/sentiric}/sentiric-sip-gateway-service:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sentiric_sip_gateway
+    env_file:
+      - ./.env
+    ports:
+      - "5080:5080/udp" # Farklı bir SIP portu
+    networks:
+      - sentiric-net
+    restart: unless-stopped
+# ... (networks tanımı)
