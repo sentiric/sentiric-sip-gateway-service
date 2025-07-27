@@ -1,5 +1,7 @@
 # --- AŞAMA 1: Derleme (Builder) ---
-FROM rust:1.79-alpine AS builder
+FROM rust:1.82 AS builder
+RUN apt-get update && apt-get install -y protobuf-compiler clang libclang-dev
+RUN rustup toolchain install nightly && rustup default nightly
 
 WORKDIR /app
 
@@ -8,6 +10,7 @@ COPY Cargo.toml Cargo.lock ./
 # Sahte bir src dizini oluşturarak sadece bağımlılıkları derle
 RUN mkdir src && echo "fn main() {}" > src/main.rs
 RUN cargo build --release
+RUN rm -f target/release/deps/sentiric_sip_gateway_service*
 
 # Kaynak kodunu kopyala ve asıl derlemeyi yap
 COPY src ./src
@@ -15,14 +18,8 @@ COPY src ./src
 RUN cargo build --release
 
 # --- AŞAMA 2: Çalıştırma (Runtime) ---
-FROM alpine:latest
-# Alpine'da dinamik linkleme için gerekli olan kütüphaneler
-RUN apk add --no-cache libc6-compat
-
+FROM gcr.io/distroless/cc-debian12
 WORKDIR /app
-
-# Derlenmiş uygulamayı builder aşamasından kopyala
 COPY --from=builder /app/target/release/sentiric-sip-gateway-service .
-
-# Uygulamayı çalıştır
-ENTRYPOINT ["./sentiric-sip-gateway-service"]
+EXPOSE 5060/udp
+ENTRYPOINT ["/app/sentiric-sip-gateway-service"]
