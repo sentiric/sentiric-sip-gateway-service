@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sock = Arc::new(UdpSocket::bind(&listen_addr).await?);
     let transactions: Transactions = Arc::new(Mutex::new(HashMap::new()));
 
-    info!(listen_addr = %listen_addr, target_addr = %target_addr, "✅ Akıllı SIP Gateway (İstek/Yanıt Ayrımı) başlatıldı.");
+    info!(listen_addr = %listen_addr, target_addr = %target_addr, "✅ SIP Gateway başlatıldı.");
 
     let transactions_clone_for_cleanup = transactions.clone();
     tokio::spawn(cleanup_old_transactions(transactions_clone_for_cleanup));
