@@ -1,0 +1,11 @@
+[package]
+name = "sentiric-sip-gateway-service"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+# Loglama için standart kütüphanelerimizi ekliyoruz.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+dotenv = "0.15"

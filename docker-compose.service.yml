@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   sip-gateway:
     image: ${DOCKER_REGISTRY:-ghcr.io/sentiric}/sentiric-sip-gateway-service:${TAG:-latest}
@@ -7,11 +5,20 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: sentiric_sip_gateway
+    # Bu klasördeki .env dosyasını okuyarak ortam değişkenlerini yükler.
     env_file:
       - ./.env
     ports:
-      - "5080:5080/udp" # Farklı bir SIP portu
+      # .env dosyasındaki LISTEN_PORT'u host'ta dinler ve
+      # konteynerin içindeki aynı porta yönlendirir.
+      - "${LISTEN_PORT}:${LISTEN_PORT}/udp"
     networks:
       - sentiric-net
     restart: unless-stopped
-# ... (networks tanımı)
+
+networks:
+  sentiric-net:
+    # Bu ağın 'sentiric-infrastructure' tarafından zaten oluşturulduğunu
+    # ve dışarıdan erişilebilir olduğunu varsayar.
+    name: ${NETWORK_NAME:-sentiric-net}
+    external: true
