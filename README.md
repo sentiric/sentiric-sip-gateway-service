@@ -1,36 +1,18 @@
-# Sentiric SIP Gateway Service
+# 🛡️ Sentiric SIP Gateway Service
 
-**Description:** Acts as an intermediary between Sentiric's internal SIP network and external SIP networks or service providers (SIP Trunking).
+**Description:** This service acts as a hardened **Session Border Controller (SBC)** and intelligent **load balancer** for the Sentiric platform. It is designed to be the first point of contact for all external SIP traffic, providing security, protocol normalization, and high availability.
 
-**Core Responsibilities:**
-*   Routing incoming SIP calls from external SIP trunks to `sentiric-sip-server`.
-*   Routing outgoing calls from `sentiric-sip-server` to external SIP trunks.
-*   Managing specific SIP headers, CODEC negotiations, and NAT traversal for external providers.
-*   Acting as a first barrier for security (IP filtering, rate limiting) and fraud detection for external SIP traffic.
+**Strategic Vision:**
+While industry-standard tools like Kamailio or OpenSIPS offer extensive features, our philosophy is to build a lightweight, purpose-built gateway that perfectly fits our microservice architecture without unnecessary complexity or external dependencies. We are not rebuilding a full-featured PBX; we are crafting a specialized, high-performance security and routing layer.
 
-**Technologies:**
-*   Node.js (or Go)
-*   UDP/TCP/TLS Sockets for SIP communication
+**Core Responsibilities (Future):**
+*   **Security Enforcement:** Acts as the primary line of defense against DDoS attacks, SIP spam/flooding, and scanners. It will perform IP filtering, rate limiting, and sanity checks on incoming SIP packets before forwarding them to the core `sip-signaling-service`.
+*   **High Availability & Load Balancing:** When multiple `sip-signaling-service` instances are running, this gateway will distribute incoming calls among them, ensuring service continuity even if one instance fails.
+*   **Protocol Normalization:** Will clean up or modify SIP headers from non-standard external providers to ensure the internal `sip-signaling-service` only deals with clean, predictable data.
+*   **WebRTC to SIP Bridging:** Will act as a bridge to convert WebRTC traffic from browsers into the standard SIP protocol used internally.
 
-**API Interactions (As a Protocol Bridge):**
-*   Communicates directly with `sentiric-sip-server` via SIP protocol.
-*   Interacts with external SIP providers/trunks.
+**Current Status:**
+This service is part of the **long-term vision** for the Sentiric platform. In the current phase, the `sentiric-sip-signaling-service` directly handles external traffic for simplicity and rapid development. The `sip-gateway-service` will be implemented as the platform scales and faces enterprise-level security and availability requirements.
 
-**Local Development:**
-1.  Clone this repository: `git clone https://github.com/sentiric/sentiric-sip-gateway-service.git`
-2.  Navigate into the directory: `cd sentiric-sip-gateway-service`
-3.  Install dependencies: `npm install` (Node.js) or `go mod tidy` (Go).
-4.  Create a `.env` file from `.env.example` to configure SIP listening ports and external trunk details.
-5.  Start the service: `npm start` (Node.js) or `go run main.go` (Go).
-
-**Configuration:**
-Refer to `config/` directory and `.env.example` for service-specific configurations, including SIP trunk details, IP filtering rules, and rate limits.
-
-**Deployment:**
-Designed for containerized deployment (e.g., Docker, Kubernetes). Refer to `sentiric-infrastructure`.
-
-**Contributing:**
-We welcome contributions! Please refer to the [Sentiric Governance](https://github.com/sentiric/sentiric-governance) repository for coding standards and contribution guidelines.
-
-**License:**
-This project is licensed under the [License](LICENSE).
+**Technology:**
+*   **Language:** Rust (for performance, security, and low-level network control).
