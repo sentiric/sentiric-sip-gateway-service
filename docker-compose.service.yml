@@ -1,24 +1,39 @@
-services:
-  sip-gateway:
-    image: ${DOCKER_REGISTRY:-ghcr.io/sentiric}/sentiric-sip-gateway-service:${TAG:-latest}
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: sentiric_sip_gateway
-    # Bu klasördeki .env dosyasını okuyarak ortam değişkenlerini yükler.
-    env_file:
-      - ./.env
-    ports:
-      # .env dosyasındaki LISTEN_PORT'u host'ta dinler ve
-      # konteynerin içindeki aynı porta yönlendirir.
-      - "${LISTEN_PORT}:${LISTEN_PORT}/udp"
-    networks:
-      - sentiric-net
-    restart: unless-stopped
 
 networks:
   sentiric-net:
-    # Bu ağın 'sentiric-infrastructure' tarafından zaten oluşturulduğunu
-    # ve dışarıdan erişilebilir olduğunu varsayar.
     name: ${NETWORK_NAME:-sentiric-net}
-    external: true
+    driver: bridge
+
+services:
+  sip-gateway:
+    
+    image: ${DOCKER_REGISTRY:-ghcr.io/sentiric}/sip-gateway:${TAG:-latest}    
+    
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SERVICE_NAME: sentiric-sip-gateway
+
+    env_file: 
+      - ./.env
+
+    # volumes:
+    #   - ../sentiric-infrastructure/tls/certs:/etc/sentiric/tls:ro
+
+    ports:
+      - "${SIP_GATEWAY_SERVICE_PORT}:${SIP_GATEWAY_SERVICE_PORT}/udp"
+
+    networks:
+      - sentiric-net
+
+    tty: true
+    init: true
+
+    profiles:
+      - telekom
+
+    mem_limit: 200m
+    cpus: 0.2
+
+    restart: always

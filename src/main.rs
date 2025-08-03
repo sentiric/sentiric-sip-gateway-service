@@ -19,9 +19,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     tracing_subscriber::fmt().json().with_env_filter(env_filter).init();
 
-    let listen_port = env::var("LISTEN_PORT").unwrap_or_else(|_| "5060".to_string());
-    let target_host = env::var("TARGET_HOST").unwrap_or_else(|_| "sip-signaling".to_string());
-    let target_port = env::var("TARGET_PORT").unwrap_or_else(|_| "5060".to_string());
+    let listen_port = env::var("SIP_GATEWAY_SERVICE_PORT").unwrap_or_else(|_| "5060".to_string());
+    let target_host = env::var("SIP_SIGNALING_SERVICE_HOST").unwrap_or_else(|_| "sip-signaling".to_string());
+    let target_port = env::var("SIP_SIGNALING_SERVICE_PORT").unwrap_or_else(|_| "5060".to_string());
 
     let listen_addr = format!("0.0.0.0:{}", listen_port);
     let target_addr = format!("{}:{}", target_host, target_port);

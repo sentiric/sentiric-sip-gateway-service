@@ -1,5 +1,5 @@
 [package]
-name = "sentiric-sip-gateway-service"
+name = "sentiric-sip-gateway"
 version = "0.1.0"
 edition = "2021"
 
