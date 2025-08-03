@@ -1,4 +1,3 @@
-
 networks:
   sentiric-net:
     name: ${NETWORK_NAME:-sentiric-net}
@@ -6,34 +5,27 @@ networks:
 
 services:
   sip-gateway:
-    
-    image: ${DOCKER_REGISTRY:-ghcr.io/sentiric}/sip-gateway:${TAG:-latest}    
-    
+
     build:
       context: .
       dockerfile: Dockerfile
       args:
         SERVICE_NAME: sentiric-sip-gateway
-
+  
     env_file: 
       - ./.env
 
     # volumes:
-    #   - ../sentiric-infrastructure/tls/certs:/etc/sentiric/tls:ro
+    #   - ../sentiric-infrastructure/tls/certs:/etc/sentiric/tls:ro      
 
     ports:
-      - "${SIP_GATEWAY_SERVICE_PORT}:${SIP_GATEWAY_SERVICE_PORT}/udp"
+      - "5060:${SIP_GATEWAY_SERVICE_PORT}/udp"
 
     networks:
       - sentiric-net
 
-    tty: true
-    init: true
-
     profiles:
+      - default
       - telekom
-
-    mem_limit: 200m
-    cpus: 0.2
 
     restart: always
