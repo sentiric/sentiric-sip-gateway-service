@@ -29,3 +29,6 @@ services:
       - telekom
 
     restart: always
+    
+    mem_limit: 128m
+    cpus: 0.2    

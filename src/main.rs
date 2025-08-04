@@ -1,4 +1,4 @@
-// DOSYA: sentiric-sip-gateway-service/src/main.rs (İSTEK/YANIT AYRIMLI NİHAİ VERSİYON)
+// DOSYA: sentiric-sip-gateway-service/src/main.rs (GÖZLEMLENEBİLİRLİK GÜNCELLENDİ)
 
 use std::collections::HashMap;
 use std::env;
@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
-use tracing::{info, error, warn, instrument};
+use tracing::{error, info, instrument, warn};
 use tracing_subscriber::EnvFilter;
 
 // Call-ID -> (istemci_adresi, oluşturulma_zamani)
@@ -16,8 +16,21 @@ type Transactions = Arc<Mutex<HashMap<String, (SocketAddr, Instant)>>>;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv::dotenv().ok();
+    
+    // --- YENİ LOGLAMA KURULUMU ---
+    let env = env::var("ENV").unwrap_or_else(|_| "production".to_string());
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    tracing_subscriber::fmt().json().with_env_filter(env_filter).init();
+
+    let subscriber_builder = tracing_subscriber::fmt().with_env_filter(env_filter);
+
+    if env == "development" {
+        // Geliştirme: Renkli, okunabilir, satır numaralı loglar
+        subscriber_builder.with_target(true).with_line_number(true).init();
+    } else {
+        // Üretim: Yapılandırılmış JSON logları
+        subscriber_builder.json().with_current_span(true).with_span_list(true).init();
+    }
+    // --- BİTTİ ---
 
     let listen_port = env::var("SIP_GATEWAY_SERVICE_PORT").unwrap_or_else(|_| "5060".to_string());
     let target_host = env::var("SIP_SIGNALING_SERVICE_HOST").unwrap_or_else(|_| "sip-signaling".to_string());
@@ -45,18 +58,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         };
 
-        // --- KRİTİK DEĞİŞİKLİK: IP yerine paketin içeriğine göre karar veriyoruz ---
         if packet_str.starts_with("SIP/2.0") {
-            // Bu bir yanıttır (örn: "SIP/2.0 200 OK")
             handle_response_from_signaling(packet_str, &sock, &transactions).await;
         } else {
-            // Bu bir istektir (örn: "INVITE sip:...")
             handle_request_from_client(packet_str, &sock, remote_addr, &target_addr, &transactions).await;
         }
     }
 }
 
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(source_addr = %remote_addr))]
 async fn handle_request_from_client(
     packet_str: &str,
     sock: &UdpSocket,
@@ -64,10 +74,9 @@ async fn handle_request_from_client(
     target_addr: &str,
     transactions: &Transactions,
 ) {
-    info!(source = %remote_addr, "➡️  İstemciden istek alındı.");
+    info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "➡️  İstemciden istek alındı.");
     if let Some(call_id) = extract_header_value(packet_str, "Call-ID") {
         let mut transactions_guard = transactions.lock().await;
-        // Sadece yeni INVITE'lar için transaction oluşturuyoruz.
         if packet_str.starts_with("INVITE") && !transactions_guard.contains_key(&call_id) {
             info!(%call_id, "Yeni bir çağrı için işlem kaydediliyor.");
             transactions_guard.insert(call_id.clone(), (remote_addr, Instant::now()));
@@ -81,23 +90,25 @@ async fn handle_request_from_client(
     }
 }
 
-#[instrument(skip_all)]
+#[instrument(skip_all, fields(call_id))]
 async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, transactions: &Transactions) {
-    info!("⬅️  Sinyal servisinden yanıt alındı.");
     if let Some(call_id) = extract_header_value(packet_str, "Call-ID") {
+        tracing::Span::current().record("call_id", &call_id as &str);
+        info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "⬅️  Sinyal servisinden yanıt alındı.");
         let transactions_guard = transactions.lock().await;
         if let Some((client_addr, _)) = transactions_guard.get(&call_id) {
             if let Err(e) = sock.send_to(packet_str.as_bytes(), client_addr).await {
-                error!(error = %e, "Yanıt istemciye yönlendirilemedi.");
+                error!(error = %e, target_addr = %client_addr, "Yanıt istemciye yönlendirilemedi.");
             }
         } else {
-            warn!(%call_id, "İşlem bulunamadı, yanıt yönlendirilemedi.");
+            warn!("İşlem bulunamadı, yanıt yönlendirilemedi.");
         }
     } else {
         warn!("Call-ID bulunamayan paket sinyal servisinden geldi, atlanıyor.");
     }
 }
 
+// ... (extract_header_value ve cleanup_old_transactions fonksiyonları aynı kalacak) ...
 fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
     let header_prefix_short = format!("{}:", header_name.chars().next().unwrap());
     let header_prefix_long = format!("{}:", header_name);
@@ -120,7 +131,7 @@ async fn cleanup_old_transactions(transactions: Transactions) {
         guard.retain(|_call_id, (_addr, created_at)| created_at.elapsed() < Duration::from_secs(120));
         let after_count = guard.len();
         if before_count > after_count {
-            info!("Temizlik görevi: {} eski işlem temizlendi. Kalan: {}", before_count - after_count, after_count);
+            info!(cleaned_count = before_count - after_count, remaining_count = after_count, "Temizlik görevi: Eski işlemler temizlendi.");
         }
     }
 }
