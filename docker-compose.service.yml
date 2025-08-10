@@ -16,7 +16,7 @@ services:
       - ./.env
 
     # volumes:
-    #   - ../sentiric-infrastructure/tls/certs:/etc/sentiric/tls:ro      
+    #   - ../sentiric-config/tls/certs:/etc/sentiric/tls:ro      
 
     ports:
       - "5060:${SIP_GATEWAY_SERVICE_PORT}/udp"
