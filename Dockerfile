@@ -28,6 +28,4 @@ WORKDIR /app
 
 COPY --from=builder /app/target/release/${SERVICE_NAME} .
 
-COPY --from=builder /app/target/release/${SERVICE_NAME} /app/main
-
-ENTRYPOINT ["/app/main"]
+ENTRYPOINT ["./sentiric-sip-gateway-service"]

@@ -10,7 +10,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        SERVICE_NAME: sentiric-sip-gateway
+        SERVICE_NAME: sentiric-sip-gateway-service
   
     env_file: 
       - ./.env
