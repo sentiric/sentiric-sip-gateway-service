@@ -1,5 +1,4 @@
-// DOSYA: sentiric-sip-gateway-service/src/main.rs (GÖZLEMLENEBİLİRLİK GÜNCELLENDİ)
-
+// ========== FILE: sentiric-sip-gateway-service/src/main.rs ==========
 use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
@@ -10,27 +9,23 @@ use tokio::sync::Mutex;
 use tracing::{error, info, instrument, warn};
 use tracing_subscriber::EnvFilter;
 
-// Call-ID -> (istemci_adresi, oluşturulma_zamani)
 type Transactions = Arc<Mutex<HashMap<String, (SocketAddr, Instant)>>>;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // YENİ EKLENEN SATIR: .env dosyasını yüklemesi için
     dotenv::dotenv().ok();
     
-    // --- YENİ LOGLAMA KURULUMU ---
     let env = env::var("ENV").unwrap_or_else(|_| "production".to_string());
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     let subscriber_builder = tracing_subscriber::fmt().with_env_filter(env_filter);
 
     if env == "development" {
-        // Geliştirme: Renkli, okunabilir, satır numaralı loglar
         subscriber_builder.with_target(true).with_line_number(true).init();
     } else {
-        // Üretim: Yapılandırılmış JSON logları
         subscriber_builder.json().with_current_span(true).with_span_list(true).init();
     }
-    // --- BİTTİ ---
 
     let listen_port = env::var("SIP_GATEWAY_SERVICE_PORT").unwrap_or_else(|_| "5060".to_string());
     let target_host = env::var("SIP_SIGNALING_SERVICE_HOST").unwrap_or_else(|_| "sip-signaling".to_string());
@@ -65,6 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 }
+
 
 #[instrument(skip_all, fields(source_addr = %remote_addr))]
 async fn handle_request_from_client(
@@ -108,7 +104,6 @@ async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, tran
     }
 }
 
-// ... (extract_header_value ve cleanup_old_transactions fonksiyonları aynı kalacak) ...
 fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
     let header_prefix_short = format!("{}:", header_name.chars().next().unwrap());
     let header_prefix_long = format!("{}:", header_name);
