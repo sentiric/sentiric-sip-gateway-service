@@ -5,7 +5,9 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-# Loglama için standart kütüphanelerimizi ekliyoruz.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
-dotenv = "0.15"
+# YENİ: dotenv'in daha modern versiyonu olan dotenvy'yi kullanıyoruz.
+dotenvy = "0.15"
+# YENİ: Daha iyi hata yönetimi için anyhow ekliyoruz.
+anyhow = "1.0"
