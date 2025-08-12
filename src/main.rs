@@ -11,9 +11,11 @@ use tracing_subscriber::EnvFilter;
 
 type Transactions = Arc<Mutex<HashMap<String, (SocketAddr, Instant)>>>;
 
+// async fn main() -> Result<(), Box<dyn std::error::Error>> {
+// DÜZELTME: Fonksiyonun dönüş tipini kaldırıyoruz.
+// Bu, programın bir hata olmadığı sürece asla bitmemesini sağlar.
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // YENİ EKLENEN SATIR: .env dosyasını yüklemesi için
+async fn main() {
     dotenv::dotenv().ok();
     
     let env = env::var("ENV").unwrap_or_else(|_| "production".to_string());
@@ -34,7 +36,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listen_addr = format!("0.0.0.0:{}", listen_port);
     let target_addr = format!("{}:{}", target_host, target_port);
 
-    let sock = Arc::new(UdpSocket::bind(&listen_addr).await?);
+    // DÜZELTME: Hata durumunda programı panic ile sonlandırıyoruz, bu daha net bir hata durumu belirtir.
+    let sock = Arc::new(UdpSocket::bind(&listen_addr).await.expect("UDP porta bağlanılamadı"));
     let transactions: Transactions = Arc::new(Mutex::new(HashMap::new()));
 
     info!(listen_addr = %listen_addr, target_addr = %target_addr, "✅ SIP Gateway başlatıldı.");
@@ -44,23 +47,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut buf = [0; 65535];
     loop {
-        let (len, remote_addr) = sock.recv_from(&mut buf).await?;
-        let packet_str = match std::str::from_utf8(&buf[..len]) {
-            Ok(s) => s,
-            Err(_) => {
-                warn!(source = %remote_addr, "UTF-8 olmayan bir paket alındı, atlanıyor.");
-                continue;
-            }
-        };
+        // DÜZELTME: recv_from hatası olursa loglayıp döngüye devam et.
+        match sock.recv_from(&mut buf).await {
+            Ok((len, remote_addr)) => {
+                 let packet_str = match std::str::from_utf8(&buf[..len]) {
+                    Ok(s) => s,
+                    Err(_) => {
+                        warn!(source = %remote_addr, "UTF-8 olmayan bir paket alındı, atlanıyor.");
+                        continue;
+                    }
+                };
 
-        if packet_str.starts_with("SIP/2.0") {
-            handle_response_from_signaling(packet_str, &sock, &transactions).await;
-        } else {
-            handle_request_from_client(packet_str, &sock, remote_addr, &target_addr, &transactions).await;
+                if packet_str.starts_with("SIP/2.0") {
+                    handle_response_from_signaling(packet_str, &sock, &transactions).await;
+                } else {
+                    handle_request_from_client(packet_str, &sock, remote_addr, &target_addr, &transactions).await;
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "UDP soketi okunurken hata oluştu.");
+            }
         }
     }
 }
 
+// ... (dosyanın geri kalanı tamamen aynı, değişiklik yok) ...
 
 #[instrument(skip_all, fields(source_addr = %remote_addr))]
 async fn handle_request_from_client(
