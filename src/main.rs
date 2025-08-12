@@ -22,13 +22,12 @@ struct AppConfig {
 
 // YENİ: Konfigürasyonu ortam değişkenlerinden yükleyen fonksiyon
 fn load_config() -> Result<AppConfig> {
-    // dotenvy kütüphanesi .env dosyasını bulamazsa hata vermez, bu yüzden güvenli.
     dotenvy::dotenv().ok();
 
     let env = env::var("ENV").unwrap_or_else(|_| "production".to_string());
     
-    let listen_port = env::var("SIP_GATEWAY_SERVICE_PORT")
-        .context("SIP_GATEWAY_SERVICE_PORT ortam değişkeni bulunamadı")?;
+    // YENİ: Dinleme portunu ortam değişkeninden al, varsayılan olarak 8060 kullan
+    let listen_port = env::var("SIP_GATEWAY_LISTEN_PORT").unwrap_or_else(|_| "8060".to_string());
         
     let target_host = env::var("SIP_SIGNALING_SERVICE_HOST")
         .context("SIP_SIGNALING_SERVICE_HOST ortam değişkeni bulunamadı")?;

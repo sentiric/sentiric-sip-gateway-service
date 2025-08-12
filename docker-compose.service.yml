@@ -13,13 +13,16 @@ services:
         SERVICE_NAME: sentiric-sip-gateway-service
   
     env_file: 
-      - ./.env
+      - ./.env 
 
+    environment:
+      - SIP_GATEWAY_LISTEN_PORT=8060
     # volumes:
     #   - ../sentiric-config/tls/certs:/etc/sentiric/tls:ro      
 
-    ports:
-      - "5060:${SIP_GATEWAY_SERVICE_PORT}/udp"
+    ports: ["${SIP_GATEWAY_SERVICE_PORT:-5060}:8060/udp"]
+    # ports:
+    #   - "${SIP_GATEWAY_SERVICE_PORT:-5060}:${SIP_GATEWAY_LISTEN_PORT:-8060}/udp"
 
     networks:
       - sentiric-net
