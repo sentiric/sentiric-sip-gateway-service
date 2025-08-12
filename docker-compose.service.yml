@@ -5,7 +5,6 @@ networks:
 
 services:
   sip-gateway:
-
     build:
       context: .
       dockerfile: Dockerfile
@@ -17,12 +16,8 @@ services:
 
     environment:
       - SIP_GATEWAY_LISTEN_PORT=8060
-    # volumes:
-    #   - ../sentiric-config/tls/certs:/etc/sentiric/tls:ro      
-
-    ports: ["${SIP_GATEWAY_SERVICE_PORT:-5060}:8060/udp"]
-    # ports:
-    #   - "${SIP_GATEWAY_SERVICE_PORT:-5060}:${SIP_GATEWAY_LISTEN_PORT:-8060}/udp"
+    ports: ["${SIP_GATEWAY_SERVICE_PORT:-5060}:8060/udp"]  
+    # ports: ["${SIP_GATEWAY_SERVICE_PORT:-5060}:${SIP_GATEWAY_LISTEN_PORT:-8060}/udp"]
 
     networks:
       - sentiric-net
@@ -32,9 +27,6 @@ services:
       - telekom
 
     restart: always
-
-    tty: true
-    stdin_open: true    
     
     mem_limit: 128m
-    cpus: 0.2    
+    cpus: 0.2

@@ -2,72 +2,68 @@
 use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
+use std::process; // YENİ: Hata durumunda programı sonlandırmak için
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use tracing::{error, info, instrument, warn};
 use tracing_subscriber::EnvFilter;
-use anyhow::{Context, Result}; // YENİ: Daha iyi hata yönetimi için
 
 type Transactions = Arc<Mutex<HashMap<String, (SocketAddr, Instant)>>>;
 
-// YENİ: Tüm konfigürasyonu tutacak yapı
-#[derive(Debug)]
-struct AppConfig {
-    listen_addr: SocketAddr,
-    target_addr: String,
-    env: String,
-}
-
-// YENİ: Konfigürasyonu ortam değişkenlerinden yükleyen fonksiyon
-fn load_config() -> Result<AppConfig> {
-    dotenvy::dotenv().ok();
-
-    let env = env::var("ENV").unwrap_or_else(|_| "production".to_string());
-    
-    // YENİ: Dinleme portunu ortam değişkeninden al, varsayılan olarak 8060 kullan
-    let listen_port = env::var("SIP_GATEWAY_LISTEN_PORT").unwrap_or_else(|_| "8060".to_string());
-        
-    let target_host = env::var("SIP_SIGNALING_SERVICE_HOST")
-        .context("SIP_SIGNALING_SERVICE_HOST ortam değişkeni bulunamadı")?;
-        
-    let target_port = env::var("SIP_SIGNALING_SERVICE_PORT")
-        .context("SIP_SIGNALING_SERVICE_PORT ortam değişkeni bulunamadı")?;
-
-    let listen_addr_str = format!("0.0.0.0:{}", listen_port);
-    let listen_addr = listen_addr_str.parse::<SocketAddr>()
-        .with_context(|| format!("Geçersiz dinleme adresi: {}", listen_addr_str))?;
-        
-    let target_addr = format!("{}:{}", target_host, target_port);
-
-    Ok(AppConfig {
-        listen_addr,
-        target_addr,
-        env,
-    })
-}
-
 #[tokio::main]
-async fn main() -> Result<()> {
-    // 1. Önce konfigürasyonu yükle. Hata varsa program burada çöker.
-    let config = load_config().expect("Konfigürasyon yüklenemedi");
+async fn main() {
+    // .env dosyasını yüklemeyi dene, bulamazsan sorun değil, ortam değişkenlerine güveniriz.
+    dotenvy::dotenv().ok();
     
-    // 2. Sonra loglamayı kur.
+    // Loglamayı en başta, konfigürasyondan bile önce kur.
+    // Böylece konfigürasyon hatalarını bile loglayabiliriz.
+    let env = env::var("ENV").unwrap_or_else(|_| "production".to_string());
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let subscriber_builder = tracing_subscriber::fmt().with_env_filter(env_filter);
-
-    if config.env == "development" {
+    if env == "development" {
         subscriber_builder.with_target(true).with_line_number(true).init();
     } else {
         subscriber_builder.json().with_current_span(true).with_span_list(true).init();
     }
 
-    // 3. Servisi başlat.
-    info!(config = ?config, "✅ SIP Gateway başlatılıyor...");
+    // Konfigürasyonu yükle. Hata varsa logla ve programı sonlandır.
+    let listen_port = match env::var("SIP_GATEWAY_LISTEN_PORT") {
+        Ok(val) => val,
+        Err(_) => {
+            error!("ZORUNLU ORTAM DEĞİŞKENİ EKSİK: SIP_GATEWAY_LISTEN_PORT");
+            process::exit(1);
+        }
+    };
+    let target_host = match env::var("SIP_SIGNALING_SERVICE_HOST") {
+        Ok(val) => val,
+        Err(_) => {
+            error!("ZORUNLU ORTAM DEĞİŞKENİ EKSİK: SIP_SIGNALING_SERVICE_HOST");
+            process::exit(1);
+        }
+    };
+    let target_port = match env::var("SIP_SIGNALING_SERVICE_PORT") {
+        Ok(val) => val,
+        Err(_) => {
+            error!("ZORUNLU ORTAM DEĞİŞKENİ EKSİK: SIP_SIGNALING_SERVICE_PORT");
+            process::exit(1);
+        }
+    };
 
-    let sock = Arc::new(UdpSocket::bind(config.listen_addr).await
-        .with_context(|| format!("UDP porta bağlanılamadı: {}", config.listen_addr))?);
+    let listen_addr_str = format!("0.0.0.0:{}", listen_port);
+    let listen_addr: SocketAddr = listen_addr_str.parse().unwrap_or_else(|e| {
+        error!(address = %listen_addr_str, error = %e, "Geçersiz dinleme adresi formatı.");
+        process::exit(1);
+    });
+    let target_addr = format!("{}:{}", target_host, target_port);
+
+    info!(%listen_addr, %target_addr, "✅ SIP Gateway başlatılıyor...");
+
+    let sock = Arc::new(UdpSocket::bind(listen_addr).await.unwrap_or_else(|e| {
+        error!(address = %listen_addr, error = %e, "UDP porta bağlanılamadı. Port başka bir servis tarafından kullanılıyor olabilir veya root yetkisi gerekebilir.");
+        process::exit(1);
+    }));
         
     let transactions: Transactions = Arc::new(Mutex::new(HashMap::new()));
     
@@ -91,7 +87,7 @@ async fn main() -> Result<()> {
                 if packet_str.starts_with("SIP/2.0") {
                     handle_response_from_signaling(packet_str, &sock, &transactions).await;
                 } else {
-                    handle_request_from_client(packet_str, &sock, remote_addr, &config.target_addr, &transactions).await;
+                    handle_request_from_client(packet_str, &sock, remote_addr, &target_addr, &transactions).await;
                 }
             }
             Err(e) => {

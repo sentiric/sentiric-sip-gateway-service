@@ -17,17 +17,23 @@ RUN cargo build --release --target x86_64-unknown-linux-musl
 COPY src ./src
 RUN cargo build --release --target x86_64-unknown-linux-musl
 
-# --- STAGE 2: Final (Sıfırdan İmaj - En Minimal ve Güvenli) ---
-# Artık debian'a bile ihtiyacımız yok. "scratch" tamamen boş bir imajdır.
-FROM scratch
+# --- STAGE 2: Final (Minimal ve İşlevsel İmaj) ---
+# DÜZELTME: scratch yerine alpine kullanıyoruz.
+FROM alpine:latest
+
+# Alpine, temel sistem dosyalarını ve kütüphaneleri içerir.
+# Ekstra olarak, TLS doğrulaması için ca-certificates ekliyoruz.
+RUN apk add --no-cache ca-certificates
 
 ARG SERVICE_NAME
 WORKDIR /app
 
-# Statik olarak derlenmiş binary, başka hiçbir şeye ihtiyaç duymaz.
+# Statik olarak derlenmiş binary'yi kopyala
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/${SERVICE_NAME} .
 
 # Güvenlik için, programı root olmayan bir kullanıcı olarak çalıştır.
-USER 10001
+# Alpine içinde 'nobody' kullanıcısı varsayılan olarak gelir (ID 65534).
+USER nobody
 
-ENTRYPOINT ["./sentiric-sip-gateway-service"]
+# ENTRYPOINT ["./sentiric-sip-gateway-service"]
+CMD ["tail", "-f", "/dev/null"]
