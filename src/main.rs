@@ -2,73 +2,70 @@
 use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
-use std::process; // YENİ: Hata durumunda programı sonlandırmak için
+use std::process;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use tracing::{error, info, instrument, warn};
 use tracing_subscriber::EnvFilter;
+use anyhow::{Context, Result};
 
 type Transactions = Arc<Mutex<HashMap<String, (SocketAddr, Instant)>>>;
 
-#[tokio::main]
-async fn main() {
-    // .env dosyasını yüklemeyi dene, bulamazsan sorun değil, ortam değişkenlerine güveniriz.
+#[derive(Debug)]
+struct AppConfig {
+    listen_addr: SocketAddr,
+    target_addr: String,
+    env: String,
+}
+
+fn load_config() -> Result<AppConfig> {
+    // Docker ortamında .env dosyasına ihtiyacımız yok, doğrudan ortam değişkenlerini okuyoruz.
+    // Yerel geliştirme için `dotenvy::dotenv().ok();` kullanılabilir ama Docker için gereksiz.
     dotenvy::dotenv().ok();
     
-    // Loglamayı en başta, konfigürasyondan bile önce kur.
-    // Böylece konfigürasyon hatalarını bile loglayabiliriz.
     let env = env::var("ENV").unwrap_or_else(|_| "production".to_string());
+    let listen_port = env::var("SIP_GATEWAY_LISTEN_PORT").unwrap_or_else(|_| "5060".to_string());
+    let target_host = env::var("SIP_SIGNALING_SERVICE_HOST").context("ZORUNLU: SIP_SIGNALING_SERVICE_HOST ortam değişkeni eksik")?;
+    let target_port = env::var("SIP_SIGNALING_SERVICE_PORT").context("ZORUNLU: SIP_SIGNALING_SERVICE_PORT ortam değişkeni eksik")?;
+    let listen_addr_str = format!("0.0.0.0:{}", listen_port);
+    let listen_addr = listen_addr_str.parse::<SocketAddr>().with_context(|| format!("Geçersiz dinleme adresi: {}", listen_addr_str))?;
+    let target_addr = format!("{}:{}", target_host, target_port);
+
+    Ok(AppConfig { listen_addr, target_addr, env })
+}
+
+#[tokio::main]
+async fn main() {
+    // Hata durumunda log basıp çıkacak şekilde sağlam bir başlangıç yapıyoruz.
+    let config = match load_config() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            // Loglama henüz başlamadığı için standart stderr'a yazıyoruz.
+            eprintln!("### KONFİGÜRASYON HATASI: {:?}", e);
+            process::exit(1);
+        }
+    };
+    
     let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let subscriber_builder = tracing_subscriber::fmt().with_env_filter(env_filter);
-    if env == "development" {
+
+    if config.env == "development" {
         subscriber_builder.with_target(true).with_line_number(true).init();
     } else {
         subscriber_builder.json().with_current_span(true).with_span_list(true).init();
     }
 
-    // Konfigürasyonu yükle. Hata varsa logla ve programı sonlandır.
-    let listen_port = match env::var("SIP_GATEWAY_LISTEN_PORT") {
-        Ok(val) => val,
-        Err(_) => {
-            error!("ZORUNLU ORTAM DEĞİŞKENİ EKSİK: SIP_GATEWAY_LISTEN_PORT");
-            process::exit(1);
-        }
-    };
-    let target_host = match env::var("SIP_SIGNALING_SERVICE_HOST") {
-        Ok(val) => val,
-        Err(_) => {
-            error!("ZORUNLU ORTAM DEĞİŞKENİ EKSİK: SIP_SIGNALING_SERVICE_HOST");
-            process::exit(1);
-        }
-    };
-    let target_port = match env::var("SIP_SIGNALING_SERVICE_PORT") {
-        Ok(val) => val,
-        Err(_) => {
-            error!("ZORUNLU ORTAM DEĞİŞKENİ EKSİK: SIP_SIGNALING_SERVICE_PORT");
-            process::exit(1);
-        }
-    };
+    info!(config = ?config, "✅ SIP Gateway başlatılıyor...");
 
-    let listen_addr_str = format!("0.0.0.0:{}", listen_port);
-    let listen_addr: SocketAddr = listen_addr_str.parse().unwrap_or_else(|e| {
-        error!(address = %listen_addr_str, error = %e, "Geçersiz dinleme adresi formatı.");
-        process::exit(1);
-    });
-    let target_addr = format!("{}:{}", target_host, target_port);
-
-    info!(%listen_addr, %target_addr, "✅ SIP Gateway başlatılıyor...");
-
-    let sock = Arc::new(UdpSocket::bind(listen_addr).await.unwrap_or_else(|e| {
-        error!(address = %listen_addr, error = %e, "UDP porta bağlanılamadı. Port başka bir servis tarafından kullanılıyor olabilir veya root yetkisi gerekebilir.");
+    let sock = Arc::new(UdpSocket::bind(config.listen_addr).await.unwrap_or_else(|e| {
+        error!(address = %config.listen_addr, error = %e, "UDP porta bağlanılamadı. Port başka bir servis tarafından kullanılıyor olabilir veya root yetkisi gerekebilir.");
         process::exit(1);
     }));
         
     let transactions: Transactions = Arc::new(Mutex::new(HashMap::new()));
-    
     info!("Dinleme başladı.");
-
     let transactions_clone_for_cleanup = transactions.clone();
     tokio::spawn(cleanup_old_transactions(transactions_clone_for_cleanup));
 
@@ -83,20 +80,16 @@ async fn main() {
                         continue;
                     }
                 };
-
                 if packet_str.starts_with("SIP/2.0") {
                     handle_response_from_signaling(packet_str, &sock, &transactions).await;
                 } else {
-                    handle_request_from_client(packet_str, &sock, remote_addr, &target_addr, &transactions).await;
+                    handle_request_from_client(packet_str, &sock, remote_addr, &config.target_addr, &transactions).await;
                 }
             }
-            Err(e) => {
-                error!(error = %e, "UDP soketi okunurken hata oluştu.");
-            }
+            Err(e) => { error!(error = %e, "UDP soketi okunurken hata oluştu."); }
         }
     }
 }
-
 
 #[instrument(skip_all, fields(source_addr = %remote_addr))]
 async fn handle_request_from_client(
@@ -113,7 +106,6 @@ async fn handle_request_from_client(
             info!(%call_id, "Yeni bir çağrı için işlem kaydediliyor.");
             transactions_guard.insert(call_id.clone(), (remote_addr, Instant::now()));
         }
-
         if let Err(e) = sock.send_to(packet_str.as_bytes(), target_addr).await {
             error!(error = %e, "Paket sinyal servisine yönlendirilemedi.");
         }
@@ -143,7 +135,6 @@ async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, tran
 fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
     let header_prefix_short = format!("{}:", header_name.chars().next().unwrap());
     let header_prefix_long = format!("{}:", header_name);
-
     packet.lines()
         .find(|line| {
             let lower_line = line.to_lowercase();

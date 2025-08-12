@@ -13,11 +13,8 @@ services:
   
     env_file: 
       - ./.env 
-
-    environment:
-      - SIP_GATEWAY_LISTEN_PORT=8060
-    ports: ["${SIP_GATEWAY_SERVICE_PORT:-5060}:8060/udp"]  
-    # ports: ["${SIP_GATEWAY_SERVICE_PORT:-5060}:${SIP_GATEWAY_LISTEN_PORT:-8060}/udp"]
+      
+    ports: ["${SIP_GATEWAY_SERVICE_PORT:-5060}:${SIP_GATEWAY_LISTEN_PORT:-5060}/udp"]
 
     networks:
       - sentiric-net
