@@ -102,8 +102,10 @@ async fn handle_request_from_client(
     info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "➡️  İstemciden istek alındı.");
     if let Some(call_id) = extract_header_value(packet_str, "Call-ID") {
         let mut transactions_guard = transactions.lock().await;
-        if packet_str.starts_with("INVITE") && !transactions_guard.contains_key(&call_id) {
-            info!(%call_id, "Yeni bir çağrı için işlem kaydediliyor.");
+        // Artık sadece INVITE'ı değil, yeni bir işlem başlatan herhangi bir isteği kaydediyoruz.
+        if !transactions_guard.contains_key(&call_id) {
+            let method = packet_str.split_whitespace().next().unwrap_or("UNKNOWN");
+            info!(%call_id, %method, "Yeni bir SIP işlemi için kayıt oluşturuluyor.");
             transactions_guard.insert(call_id.clone(), (remote_addr, Instant::now()));
         }
         if let Err(e) = sock.send_to(packet_str.as_bytes(), target_addr).await {
