@@ -1,4 +1,6 @@
-// ========== FILE: sentiric-sip-gateway-service/src/main.rs ==========
+// File: sentiric-sip-gateway-service/src/main.rs (SBC İyileştirmeleriyle)
+
+use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::env;
 use std::net::SocketAddr;
@@ -7,11 +9,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, instrument, warn, Span};
 use tracing_subscriber::EnvFilter;
-use anyhow::{Context, Result};
 
-type Transactions = Arc<Mutex<HashMap<String, (SocketAddr, Instant)>>>;
+// DÜZELTME: İşlem anahtarımız artık daha spesifik: (Call-ID, CSeq Method)
+type TransactionKey = (String, String);
+type Transactions = Arc<Mutex<HashMap<TransactionKey, (SocketAddr, Instant)>>>;
 
 #[derive(Debug)]
 struct AppConfig {
@@ -21,8 +24,6 @@ struct AppConfig {
 }
 
 fn load_config() -> Result<AppConfig> {
-    // Docker ortamında .env dosyasına ihtiyacımız yok, doğrudan ortam değişkenlerini okuyoruz.
-    // Yerel geliştirme için `dotenvy::dotenv().ok();` kullanılabilir ama Docker için gereksiz.
     dotenvy::dotenv().ok();
     
     let env = env::var("ENV").unwrap_or_else(|_| "production".to_string());
@@ -38,11 +39,9 @@ fn load_config() -> Result<AppConfig> {
 
 #[tokio::main]
 async fn main() {
-    // Hata durumunda log basıp çıkacak şekilde sağlam bir başlangıç yapıyoruz.
     let config = match load_config() {
         Ok(cfg) => cfg,
         Err(e) => {
-            // Loglama henüz başlamadığı için standart stderr'a yazıyoruz.
             eprintln!("### KONFİGÜRASYON HATASI: {:?}", e);
             process::exit(1);
         }
@@ -60,7 +59,7 @@ async fn main() {
     info!(config = ?config, "✅ SIP Gateway başlatılıyor...");
 
     let sock = Arc::new(UdpSocket::bind(config.listen_addr).await.unwrap_or_else(|e| {
-        error!(address = %config.listen_addr, error = %e, "UDP porta bağlanılamadı. Port başka bir servis tarafından kullanılıyor olabilir veya root yetkisi gerekebilir.");
+        error!(address = %config.listen_addr, error = %e, "UDP porta bağlanılamadı.");
         process::exit(1);
     }));
         
@@ -75,10 +74,7 @@ async fn main() {
             Ok((len, remote_addr)) => {
                  let packet_str = match std::str::from_utf8(&buf[..len]) {
                     Ok(s) => s,
-                    Err(_) => {
-                        warn!(source = %remote_addr, "UTF-8 olmayan bir paket alındı, atlanıyor.");
-                        continue;
-                    }
+                    Err(_) => { warn!(source = %remote_addr, "UTF-8 olmayan bir paket alındı, atlanıyor."); continue; }
                 };
                 if packet_str.starts_with("SIP/2.0") {
                     handle_response_from_signaling(packet_str, &sock, &transactions).await;
@@ -91,7 +87,7 @@ async fn main() {
     }
 }
 
-#[instrument(skip_all, fields(source_addr = %remote_addr))]
+#[instrument(skip_all, fields(source_addr = %remote_addr, call_id, method))]
 async fn handle_request_from_client(
     packet_str: &str,
     sock: &UdpSocket,
@@ -100,29 +96,38 @@ async fn handle_request_from_client(
     transactions: &Transactions,
 ) {
     info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "➡️  İstemciden istek alındı.");
-    if let Some(call_id) = extract_header_value(packet_str, "Call-ID") {
+    
+    if let Some((call_id, cseq_method)) = extract_transaction_key(packet_str) {
+        Span::current().record("call_id", &call_id as &str);
+        Span::current().record("method", &cseq_method as &str);
+        
         let mut transactions_guard = transactions.lock().await;
-        // Artık sadece INVITE'ı değil, yeni bir işlem başlatan herhangi bir isteği kaydediyoruz.
-        if !transactions_guard.contains_key(&call_id) {
-            let method = packet_str.split_whitespace().next().unwrap_or("UNKNOWN");
-            info!(%call_id, %method, "Yeni bir SIP işlemi için kayıt oluşturuluyor.");
-            transactions_guard.insert(call_id.clone(), (remote_addr, Instant::now()));
+        let tx_key = (call_id, cseq_method);
+
+        if !transactions_guard.contains_key(&tx_key) {
+            info!("Yeni bir SIP işlemi için kayıt oluşturuluyor.");
+            transactions_guard.insert(tx_key, (remote_addr, Instant::now()));
         }
+
         if let Err(e) = sock.send_to(packet_str.as_bytes(), target_addr).await {
             error!(error = %e, "Paket sinyal servisine yönlendirilemedi.");
         }
     } else {
-        warn!("Call-ID bulunamayan paket istemciden geldi, atlanıyor.");
+        warn!("Call-ID veya CSeq bulunamayan paket istemciden geldi, atlanıyor.");
     }
 }
 
-#[instrument(skip_all, fields(call_id))]
+#[instrument(skip_all, fields(call_id, method))]
 async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, transactions: &Transactions) {
-    if let Some(call_id) = extract_header_value(packet_str, "Call-ID") {
-        tracing::Span::current().record("call_id", &call_id as &str);
+    if let Some((call_id, cseq_method)) = extract_transaction_key(packet_str) {
+        Span::current().record("call_id", &call_id as &str);
+        Span::current().record("method", &cseq_method as &str);
+
         info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "⬅️  Sinyal servisinden yanıt alındı.");
         let transactions_guard = transactions.lock().await;
-        if let Some((client_addr, _)) = transactions_guard.get(&call_id) {
+        
+        let tx_key = (call_id, cseq_method);
+        if let Some((client_addr, _)) = transactions_guard.get(&tx_key) {
             if let Err(e) = sock.send_to(packet_str.as_bytes(), client_addr).await {
                 error!(error = %e, target_addr = %client_addr, "Yanıt istemciye yönlendirilemedi.");
             }
@@ -130,20 +135,28 @@ async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, tran
             warn!("İşlem bulunamadı, yanıt yönlendirilemedi.");
         }
     } else {
-        warn!("Call-ID bulunamayan paket sinyal servisinden geldi, atlanıyor.");
+        warn!("Call-ID veya CSeq bulunamayan paket sinyal servisinden geldi, atlanıyor.");
     }
 }
 
 fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
-    let header_prefix_short = format!("{}:", header_name.chars().next().unwrap());
     let header_prefix_long = format!("{}:", header_name);
     packet.lines()
-        .find(|line| {
-            let lower_line = line.to_lowercase();
-            lower_line.starts_with(&header_prefix_long.to_lowercase()) || lower_line.starts_with(&header_prefix_short.to_lowercase())
-        })
+        .find(|line| line.to_lowercase().starts_with(&header_prefix_long.to_lowercase()))
         .and_then(|line| line.split_once(':'))
         .map(|(_, value)| value.trim().to_string())
+}
+
+// YENİ FONKSİYON: Hem Call-ID hem de CSeq'i alarak benzersiz bir anahtar oluşturur.
+fn extract_transaction_key(packet: &str) -> Option<(String, String)> {
+    let call_id = extract_header_value(packet, "Call-ID")?;
+    let cseq_line = extract_header_value(packet, "CSeq")?;
+    let cseq_parts: Vec<&str> = cseq_line.split_whitespace().collect();
+    if cseq_parts.len() == 2 {
+        Some((call_id, cseq_parts[1].to_string()))
+    } else {
+        None
+    }
 }
 
 async fn cleanup_old_transactions(transactions: Transactions) {
@@ -152,7 +165,7 @@ async fn cleanup_old_transactions(transactions: Transactions) {
         interval.tick().await;
         let mut guard = transactions.lock().await;
         let before_count = guard.len();
-        guard.retain(|_call_id, (_addr, created_at)| created_at.elapsed() < Duration::from_secs(120));
+        guard.retain(|_key, (_addr, created_at)| created_at.elapsed() < Duration::from_secs(120));
         let after_count = guard.len();
         if before_count > after_count {
             info!(cleaned_count = before_count - after_count, remaining_count = after_count, "Temizlik görevi: Eski işlemler temizlendi.");

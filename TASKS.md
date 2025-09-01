@@ -13,6 +13,11 @@ Bu faz, servisin temel yönlendirme ve ağ adresi dönüşümü görevlerini yer
 -   [x] **İşlem Takibi (Transaction Matching):** `Call-ID` kullanarak istek ve yanıtları eşleştirme ve yanıtları doğru istemciye geri gönderme.
 -   [x] **Eski İşlemleri Temizleme:** Belirli bir süre yanıt almayan işlemleri hafızadan temizleyen bir arka plan görevi.
 
+-   [ ] **Görev ID:** `SIG-BUG-01`
+    *   **Açıklama:** `agent-service`'ten gelen sonlandırma isteği üzerine `sip-signaling` tarafından gönderilen `BYE` paketinin neden istemci tarafından işlenmediğini araştır ve düzelt. Bu, `Via`, `Route`, `Record-Route` başlıklarının doğru yönetilmesini gerektirebilir.
+    *   **Kabul Kriterleri:**
+        *   [ ] Sistem "Çağrıyı sonlandırıyorum" anonsunu çaldıktan sonra, softphone'un çağrıyı **otomatik olarak kapatması** gerekir.
+
 ---
 
 ### Faz 2: Güvenlik ve Dayanıklılık (Sıradaki Öncelik)
