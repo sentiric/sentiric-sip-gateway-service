@@ -4,23 +4,29 @@ Bu belge, `sip-gateway-service`'in geliştirme yol haritasını ve önceliklerin
 
 ---
 
-### Faz 1: Temel Proxy ve NAT Çözümü (Mevcut Durum)
-
-Bu faz, servisin temel yönlendirme ve ağ adresi dönüşümü görevlerini yerine getirmesini hedefler.
-
--   [x] **UDP Sunucusu:** Belirtilen porttan ham UDP paketlerini dinleme.
--   [x] **Paket Yönlendirme:** Gelen paketleri `sip-signaling-service`'e, giden paketleri ise orijinal istemci adresine yönlendirme.
--   [x] **İşlem Takibi (Transaction Matching):** `Call-ID` kullanarak istek ve yanıtları eşleştirme ve yanıtları doğru istemciye geri gönderme.
--   [x] **Eski İşlemleri Temizleme:** Belirli bir süre yanıt almayan işlemleri hafızadan temizleyen bir arka plan görevi.
-
--   [ ] **Görev ID:** `SIG-BUG-01`
-    *   **Açıklama:** `agent-service`'ten gelen sonlandırma isteği üzerine `sip-signaling` tarafından gönderilen `BYE` paketinin neden istemci tarafından işlenmediğini araştır ve düzelt. Bu, `Via`, `Route`, `Record-Route` başlıklarının doğru yönetilmesini gerektirebilir.
-    *   **Kabul Kriterleri:**
-        *   [ ] Sistem "Çağrıyı sonlandırıyorum" anonsunu çaldıktan sonra, softphone'un çağrıyı **otomatik olarak kapatması** gerekir.
+### **FAZ 1: Temel Proxy ve NAT Çözümü (Tamamlanmış Görevler)**
+*   [x] **UDP Sunucusu:** Belirtilen porttan ham UDP paketlerini dinleme.
+*   [x] **Paket Yönlendirme:** Gelen paketleri `sip-signaling-service`'e, giden paketleri ise orijinal istemci adresine yönlendirme.
+*   [x] **İşlem Takibi (Transaction Matching):** `Call-ID` ve `CSeq` kullanarak istek ve yanıtları eşleştirme ve yanıtları doğru istemciye geri gönderme.
+*   [x] **Eski İşlemleri Temizleme:** Belirli bir süre yanıt almayan işlemleri hafızadan temizleyen bir arka plan görevi.
 
 ---
 
-### Faz 2: Güvenlik ve Dayanıklılık (Sıradaki Öncelik)
+### **FAZ 2: Güvenilir Çağrı Kontrolü ve SBC Yetenekleri (Mevcut Odak)**
+
+-   **Görev ID: SIG-BUG-01 - Çağrı Sonlandırma (`BYE`) Akışını Sağlamlaştırma**
+    -   **Durum:** ✅ **Tamamlandı**
+    -   **Öncelik:** **KRİTİK**
+    -   **Problem Tanımı:** Sistem `BYE` gönderdiğinde, `sip-gateway`'in `Via` başlıklarını doğru yönetmemesi nedeniyle paket telekom operatörüne ulaşmıyor ve çağrı açık kalıyordu.
+    -   **Çözüm Stratejisi:** `sip-gateway` artık bir Session Border Controller (SBC) gibi davranarak gelen ve giden paketlerdeki `Via` başlıklarını kendi adresiyle modifiye ediyor. Bu, `BYE` gibi daha sonraki isteklerin ve yanıtların doğru rotayı takip etmesini sağlar.
+    -   **Kabul Kriterleri:**
+        -   [x] `agent-service`, çağrıyı sonlandırma komutunu verdiğinde, kullanıcının telefon hattı **5 saniye içinde otomatik olarak kapanmalıdır.**
+        -   [x] `sip-signaling` loglarında artık tekrarlayan "BYE isteği alınan çağrı aktif çağrılar listesinde bulunamadı" uyarısı görülmemelidir.
+    -   **Ek Not:** Bu düzeltme sırasında derleyici hatalarına neden olan `AppConfig` alan adı tutarsızlığı ve tip uyuşmazlığı da giderilmiştir.
+
+---
+
+### **FAZ 3: Güvenlik ve Dayanıklılık (Sıradaki Öncelik)**
 
 Bu faz, servisi basit bir proxy'den, platformu koruyan bir güvenlik kalkanına dönüştürmeyi hedefler.
 
@@ -34,7 +40,7 @@ Bu faz, servisi basit bir proxy'den, platformu koruyan bir güvenlik kalkanına 
 
 ---
 
-### Faz 3: Gelişmiş Protokol Desteği
+### **FAZ 4: Gelişmiş Protokol Desteği (Gelecek Vizyonu)**
 
 Bu faz, platformun daha modern iletişim kanallarını desteklemesini sağlamayı hedefler.
 
