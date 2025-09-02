@@ -1,5 +1,4 @@
-// File: sentiric-sip-gateway-service/src/main.rs (SBC İyileştirmeleriyle)
-
+// src/main.rs dosyasının TAM ve GÜNCELLENMİŞ HALİ
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::env;
@@ -12,9 +11,16 @@ use tokio::sync::Mutex;
 use tracing::{error, info, instrument, warn, Span};
 use tracing_subscriber::EnvFilter;
 
-// DÜZELTME: İşlem anahtarımız artık daha spesifik: (Call-ID, CSeq Method)
+// --- DEĞİŞİKLİK: Via başlıklarını yönetmek için daha detaylı bir Transaction yapısı ---
+#[derive(Clone)]
+struct TransactionInfo {
+    original_client_addr: SocketAddr,
+    original_via_header: String,
+    created_at: Instant,
+}
 type TransactionKey = (String, String);
-type Transactions = Arc<Mutex<HashMap<TransactionKey, (SocketAddr, Instant)>>>;
+type Transactions = Arc<Mutex<HashMap<TransactionKey, TransactionInfo>>>;
+// --- DEĞİŞİKLİK SONU ---
 
 #[derive(Debug)]
 struct AppConfig {
@@ -62,8 +68,12 @@ async fn main() {
         error!(address = %config.listen_addr, error = %e, "UDP porta bağlanılamadı.");
         process::exit(1);
     }));
-        
+
+    
+    // --- DEĞİŞİKLİK: Transactions tipi güncellendi ---
     let transactions: Transactions = Arc::new(Mutex::new(HashMap::new()));
+    // --- DEĞİŞİKLİK SONU ---
+
     info!("Dinleme başladı.");
     let transactions_clone_for_cleanup = transactions.clone();
     tokio::spawn(cleanup_old_transactions(transactions_clone_for_cleanup));
@@ -76,17 +86,21 @@ async fn main() {
                     Ok(s) => s,
                     Err(_) => { warn!(source = %remote_addr, "UTF-8 olmayan bir paket alındı, atlanıyor."); continue; }
                 };
-                if packet_str.starts_with("SIP/2.0") {
+
+                // --- DEĞİŞİKLİK: SBC gibi davranma mantığı ---
+                if packet_str.starts_with("SIP/2.0") { // Bu bir yanıttır
                     handle_response_from_signaling(packet_str, &sock, &transactions).await;
-                } else {
-                    handle_request_from_client(packet_str, &sock, remote_addr, &config.target_addr, &transactions).await;
+                } else { // Bu bir istektir
+                    handle_request_from_client(packet_str, &sock, remote_addr, &config.target_addr, &transactions, &config).await;
                 }
+                // --- DEĞİŞİKLİK SONU ---
             }
             Err(e) => { error!(error = %e, "UDP soketi okunurken hata oluştu."); }
         }
     }
 }
 
+// --- DEĞİŞİKLİK: handle_request_from_client fonksiyonu güncellendi ---
 #[instrument(skip_all, fields(source_addr = %remote_addr, call_id, method))]
 async fn handle_request_from_client(
     packet_str: &str,
@@ -94,6 +108,7 @@ async fn handle_request_from_client(
     remote_addr: SocketAddr,
     target_addr: &str,
     transactions: &Transactions,
+    config: &AppConfig, // config eklendi
 ) {
     info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "➡️  İstemciden istek alındı.");
     
@@ -101,22 +116,37 @@ async fn handle_request_from_client(
         Span::current().record("call_id", &call_id as &str);
         Span::current().record("method", &cseq_method as &str);
         
-        let mut transactions_guard = transactions.lock().await;
-        let tx_key = (call_id, cseq_method);
+        // Via başlığını al ve modifiye et
+        if let Some(original_via) = extract_header_value(packet_str, "Via") {
+            let mut transactions_guard = transactions.lock().await;
+            let tx_key = (call_id, cseq_method);
+    
+            if !transactions_guard.contains_key(&tx_key) {
+                info!("Yeni bir SIP işlemi için kayıt oluşturuluyor.");
+                transactions_guard.insert(tx_key, TransactionInfo {
+                    original_client_addr: remote_addr,
+                    original_via_header: original_via.clone(),
+                    created_at: Instant::now(),
+                });
+            }
 
-        if !transactions_guard.contains_key(&tx_key) {
-            info!("Yeni bir SIP işlemi için kayıt oluşturuluyor.");
-            transactions_guard.insert(tx_key, (remote_addr, Instant::now()));
-        }
-
-        if let Err(e) = sock.send_to(packet_str.as_bytes(), target_addr).await {
-            error!(error = %e, "Paket sinyal servisine yönlendirilemedi.");
+            // Yeni Via başlığı oluştur: Kendi adresimizi ekleyelim
+            let new_via = format!("SIP/2.0/UDP {}:{};branch={};rport;received={}", config.sip_listen_addr.ip(), config.sip_listen_addr.port(), extract_branch_from_via(&original_via).unwrap_or("z9hG4bK-gateway"), remote_addr.ip());
+            let modified_packet = packet_str.replacen(&original_via, &new_via, 1);
+    
+            if let Err(e) = sock.send_to(modified_packet.as_bytes(), target_addr).await {
+                error!(error = %e, "Modifiye edilmiş paket sinyal servisine yönlendirilemedi.");
+            }
+        } else {
+            warn!("Via başlığı olmayan paket geldi, atlanıyor.");
         }
     } else {
         warn!("Call-ID veya CSeq bulunamayan paket istemciden geldi, atlanıyor.");
     }
 }
+// --- DEĞİŞİKLİK SONU ---
 
+// --- DEĞİŞİKLİK: handle_response_from_signaling fonksiyonu güncellendi ---
 #[instrument(skip_all, fields(call_id, method))]
 async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, transactions: &Transactions) {
     if let Some((call_id, cseq_method)) = extract_transaction_key(packet_str) {
@@ -127,9 +157,15 @@ async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, tran
         let transactions_guard = transactions.lock().await;
         
         let tx_key = (call_id, cseq_method);
-        if let Some((client_addr, _)) = transactions_guard.get(&tx_key) {
-            if let Err(e) = sock.send_to(packet_str.as_bytes(), client_addr).await {
-                error!(error = %e, target_addr = %client_addr, "Yanıt istemciye yönlendirilemedi.");
+        if let Some(tx_info) = transactions_guard.get(&tx_key) {
+            // Sunucunun Via başlığını, orijinal istemcinin Via'sıyla değiştir
+            if let Some(server_via) = extract_header_value(packet_str, "Via") {
+                let modified_packet = packet_str.replacen(&server_via, &tx_info.original_via_header, 1);
+                if let Err(e) = sock.send_to(modified_packet.as_bytes(), tx_info.original_client_addr).await {
+                    error!(error = %e, target_addr = %tx_info.original_client_addr, "Yanıt istemciye yönlendirilemedi.");
+                }
+            } else {
+                warn!("Yanıtta Via başlığı yok, paket değiştirilemedi.");
             }
         } else {
             warn!("İşlem bulunamadı, yanıt yönlendirilemedi.");
@@ -138,6 +174,15 @@ async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, tran
         warn!("Call-ID veya CSeq bulunamayan paket sinyal servisinden geldi, atlanıyor.");
     }
 }
+// --- DEĞİŞİKLİK SONU ---
+
+// --- YENİ YARDIMCI FONKSİYON ---
+fn extract_branch_from_via(via_header: &str) -> Option<String> {
+    via_header.split(';').find(|part| part.trim().starts_with("branch="))
+        .and_then(|part| part.split('=').nth(1))
+        .map(|s| s.to_string())
+}
+// --- YENİ YARDIMCI FONKSİYON SONU ---
 
 fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
     let header_prefix_long = format!("{}:", header_name);
@@ -159,16 +204,18 @@ fn extract_transaction_key(packet: &str) -> Option<(String, String)> {
     }
 }
 
+// --- DEĞİŞİKLİK: cleanup_old_transactions fonksiyonu güncellendi ---
 async fn cleanup_old_transactions(transactions: Transactions) {
     let mut interval = tokio::time::interval(Duration::from_secs(60));
     loop {
         interval.tick().await;
         let mut guard = transactions.lock().await;
         let before_count = guard.len();
-        guard.retain(|_key, (_addr, created_at)| created_at.elapsed() < Duration::from_secs(120));
+        guard.retain(|_key, tx_info| tx_info.created_at.elapsed() < Duration::from_secs(120));
         let after_count = guard.len();
         if before_count > after_count {
             info!(cleaned_count = before_count - after_count, remaining_count = after_count, "Temizlik görevi: Eski işlemler temizlendi.");
         }
     }
 }
+// --- DEĞİŞİKLİK SONU ---
