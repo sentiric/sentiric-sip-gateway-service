@@ -200,16 +200,18 @@ async fn handle_request(
 
 #[instrument(skip_all, fields(call_id, method))]
 async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, transactions: &Transactions) {
+    // extract_transaction_key'den gelen (call_id, cseq_method) sahipliği burada.
     if let Some((call_id, cseq_method)) = extract_transaction_key(packet_str) {
         Span::current().record("call_id", &call_id as &str);
         Span::current().record("method", &cseq_method as &str);
 
         info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "⬅️  Sinyal servisinden yanıt alındı.");
         
-        // === GÜÇLENDİRİLMİŞ MANTIK ===
+        // tx_key'i oluştururken cseq_method'un sahipliğini taşıyoruz. Bu doğru.
+        let tx_key = (call_id, cseq_method);
+        
         let mut transactions_guard = transactions.lock().await;
         
-        let tx_key = (call_id, cseq_method);
         if let Some(tx_info) = transactions_guard.get(&tx_key) {
             if let Some(server_via) = extract_header_value(packet_str, "Via") {
                 let modified_packet = packet_str.replacen(&server_via, &tx_info.original_via_header, 1);
@@ -222,13 +224,12 @@ async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, tran
                 warn!("Yanıtta Via başlığı yok, paket değiştirilemedi.");
             }
             
-            // Eğer yanıt bir BYE isteğine karşılık 200 OK ise, bu işlem artık tamamlanmıştır.
-            // Hafızadan temizleyebiliriz.
-            if packet_str.contains("SIP/2.0 200 OK") && cseq_method == "BYE" {
+            // === DÜZELTME BURADA ===
+            // Artık `cseq_method`'u değil, sahipliği alan `tx_key`'in ikinci elemanını (`tx_key.1`) kullanıyoruz.
+            if packet_str.contains("SIP/2.0 200 OK") && tx_key.1 == "BYE" {
                 info!("BYE işlemi başarıyla tamamlandı, işlem kaydı siliniyor.");
                 transactions_guard.remove(&tx_key);
             }
-
         } else {
             warn!("İşlem bulunamadı, yanıt yönlendirilemedi.");
         }
