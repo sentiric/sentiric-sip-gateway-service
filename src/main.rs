@@ -1,8 +1,8 @@
-// src/main.rs dosyasının TAM ve GÜNCELLENMİŞ HALİ
+// src/main.rs dosyasının TAM, GÜVENLİ ve DERLENEBİLİR NİHAİ HALİ
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::env;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr}; // IpAddr'ı import ediyoruz
 use std::process;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -127,19 +127,28 @@ async fn handle_request(
     if let Some((call_id, cseq_method)) = extract_transaction_key(packet_str) {
         Span::current().record("call_id", &call_id as &str);
 
-        // --- YENİ MANTIK: Giden (BYE) ve Gelen (INVITE) istekleri için farklı işlem ---
-        if remote_addr.ip().is_loopback() || remote_addr.ip().is_private() { // `signaling`'den gelen istekler
-            info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "⬅️  Sinyal servisinden giden istek alındı.");
+        // --- YENİ ve GÜVENLİ TİP KONTROLÜ ---
+        let is_internal_request = match remote_addr.ip() {
+            IpAddr::V4(ipv4) => ipv4.is_private() || ipv4.is_loopback(),
+            IpAddr::V6(ipv6) => ipv6.is_loopback(),
+        };
+
+        if is_internal_request { // `signaling`'den gelen istekler (örn: BYE)
+            info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "⬅️  Sinyal servisinden giden istek alındı (örn: BYE).");
             let transactions_guard = transactions.lock().await;
-            if let Some(tx_info) = transactions_guard.values().find(|info| extract_call_id(packet_str).as_deref() == extract_call_id_from_via(&info.original_via_header).as_deref()) {
+            
+            // BYE gibi istekler için doğru oturumu bul
+            if let Some(tx_info) = transactions_guard.get(&(call_id, "INVITE".to_string())) {
                  let modified_packet = packet_str.replacen(extract_header_value(packet_str, "Via").unwrap_or_default().as_str(), &tx_info.original_via_header, 1);
                  if let Err(e) = sock.send_to(modified_packet.as_bytes(), tx_info.original_client_addr).await {
-                     error!(error = %e, "Giden istek telekoma yönlendirilemedi.");
+                     error!(error = %e, "Giden istek (örn: BYE) telekoma yönlendirilemedi.");
+                 } else {
+                    info!(target = %tx_info.original_client_addr, "Giden istek telekoma başarıyla yönlendirildi.");
                  }
             } else {
-                 warn!("Giden istekle eşleşen aktif işlem bulunamadı. Yönlendirilemiyor.");
+                 warn!("Giden istekle (örn: BYE) eşleşen aktif INVITE işlemi bulunamadı. Yönlendirilemiyor.");
             }
-        } else { // Dış dünyadan (client) gelen istekler
+        } else { // Dış dünyadan (client/telekom) gelen istekler
             info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "➡️  İstemciden istek alındı.");
             if let Some(original_via) = extract_header_value(packet_str, "Via") {
                 let mut transactions_guard = transactions.lock().await;
@@ -173,14 +182,6 @@ async fn handle_request(
     } else {
         warn!("Call-ID veya CSeq bulunamayan paket geldi, atlanıyor.");
     }
-}
-
-// --- Ekstra yardımcı fonksiyonlar ---
-fn extract_call_id(packet: &str) -> Option<String> {
-    extract_header_value(packet, "Call-ID")
-}
-fn extract_call_id_from_via(via: &str) -> Option<String> {
-    extract_header_value(&format!("Via: {}", via), "Call-ID")
 }
 
 
