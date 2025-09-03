@@ -17,7 +17,7 @@ struct TransactionInfo {
     original_via_header: String,
     created_at: Instant,
 }
-type TransactionKey = (String, String);
+type TransactionKey = (String, String); // (Call-ID, CSeq Method)
 type Transactions = Arc<Mutex<HashMap<TransactionKey, TransactionInfo>>>;
 
 #[derive(Debug)]
@@ -25,7 +25,6 @@ struct AppConfig {
     pub listen_addr: SocketAddr,
     pub target_addr: String,
     pub env: String,
-    // YENİ: Versiyon Bilgisi
     pub service_version: String,
     pub git_commit: String,
     pub build_date: String,
@@ -42,11 +41,9 @@ fn load_config() -> Result<AppConfig> {
     let listen_addr = listen_addr_str.parse::<SocketAddr>().with_context(|| format!("Geçersiz dinleme adresi: {}", listen_addr_str))?;
     let target_addr = format!("{}:{}", target_host, target_port);
 
-    // YENİ: Build-time environment değişkenlerini oku
     let service_version = env::var("SERVICE_VERSION").unwrap_or_else(|_| "0.1.0".to_string());
     let git_commit = env::var("GIT_COMMIT").unwrap_or_else(|_| "unknown".to_string());
     let build_date = env::var("BUILD_DATE").unwrap_or_else(|_| "unknown".to_string());
-
 
     Ok(AppConfig { 
         listen_addr, 
@@ -77,7 +74,6 @@ async fn main() {
         subscriber_builder.json().with_current_span(true).with_span_list(true).init();
     }
     
-    // YENİ: Başlangıçta versiyon bilgisini logla
     info!(
         service_name = "sentiric-sip-gateway-service",
         version = %config.service_version,
@@ -108,7 +104,7 @@ async fn main() {
                 if packet_str.starts_with("SIP/2.0") {
                     handle_response_from_signaling(packet_str, &sock, &transactions).await;
                 } else {
-                    handle_request_from_client(packet_str, &sock, remote_addr, &config.target_addr, &transactions, &config).await;
+                    handle_request(packet_str, &sock, remote_addr, &config.target_addr, &transactions, &config).await;
                 }
             }
             Err(e) => { error!(error = %e, "UDP soketi okunurken hata oluştu."); }
@@ -117,7 +113,7 @@ async fn main() {
 }
 
 #[instrument(skip_all, fields(source_addr = %remote_addr, call_id, method))]
-async fn handle_request_from_client(
+async fn handle_request(
     packet_str: &str,
     sock: &UdpSocket,
     remote_addr: SocketAddr,
@@ -125,47 +121,68 @@ async fn handle_request_from_client(
     transactions: &Transactions,
     config: &AppConfig,
 ) {
-    info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "➡️  İstemciden istek alındı.");
+    let method = packet_str.split_whitespace().next().unwrap_or("UNKNOWN");
+    Span::current().record("method", &method);
     
     if let Some((call_id, cseq_method)) = extract_transaction_key(packet_str) {
         Span::current().record("call_id", &call_id as &str);
-        Span::current().record("method", &cseq_method as &str);
-        
-        if let Some(original_via) = extract_header_value(packet_str, "Via") {
-            let mut transactions_guard = transactions.lock().await;
-            let tx_key = (call_id, cseq_method);
-    
-            if !transactions_guard.contains_key(&tx_key) {
-                info!("Yeni bir SIP işlemi için kayıt oluşturuluyor.");
-                transactions_guard.insert(tx_key, TransactionInfo {
-                    original_client_addr: remote_addr,
-                    original_via_header: original_via.clone(),
-                    created_at: Instant::now(),
-                });
-            }
 
-            // --- DEĞİŞİKLİK BURADA: `sip_listen_addr` -> `listen_addr` ve `to_string()` eklendi ---
-            let new_via = format!(
-                "SIP/2.0/UDP {}:{};branch={};rport;received={}",
-                config.listen_addr.ip(),
-                config.listen_addr.port(),
-                extract_branch_from_via(&original_via).unwrap_or_else(|| "sentiric-gateway".to_string()),
-                remote_addr.ip()
-            );
-            // --- DEĞİŞİKLİK SONU ---
-            
-            let modified_packet = packet_str.replacen(&original_via, &new_via, 1);
-    
-            if let Err(e) = sock.send_to(modified_packet.as_bytes(), target_addr).await {
-                error!(error = %e, "Modifiye edilmiş paket sinyal servisine yönlendirilemedi.");
+        // --- YENİ MANTIK: Giden (BYE) ve Gelen (INVITE) istekleri için farklı işlem ---
+        if remote_addr.ip().is_loopback() || remote_addr.ip().is_private() { // `signaling`'den gelen istekler
+            info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "⬅️  Sinyal servisinden giden istek alındı.");
+            let transactions_guard = transactions.lock().await;
+            if let Some(tx_info) = transactions_guard.values().find(|info| extract_call_id(packet_str).as_deref() == extract_call_id_from_via(&info.original_via_header).as_deref()) {
+                 let modified_packet = packet_str.replacen(extract_header_value(packet_str, "Via").unwrap_or_default().as_str(), &tx_info.original_via_header, 1);
+                 if let Err(e) = sock.send_to(modified_packet.as_bytes(), tx_info.original_client_addr).await {
+                     error!(error = %e, "Giden istek telekoma yönlendirilemedi.");
+                 }
+            } else {
+                 warn!("Giden istekle eşleşen aktif işlem bulunamadı. Yönlendirilemiyor.");
             }
-        } else {
-            warn!("Via başlığı olmayan paket geldi, atlanıyor.");
+        } else { // Dış dünyadan (client) gelen istekler
+            info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "➡️  İstemciden istek alındı.");
+            if let Some(original_via) = extract_header_value(packet_str, "Via") {
+                let mut transactions_guard = transactions.lock().await;
+                let tx_key = (call_id, cseq_method);
+        
+                if !transactions_guard.contains_key(&tx_key) {
+                    info!("Yeni bir SIP işlemi için kayıt oluşturuluyor.");
+                    transactions_guard.insert(tx_key, TransactionInfo {
+                        original_client_addr: remote_addr,
+                        original_via_header: original_via.clone(),
+                        created_at: Instant::now(),
+                    });
+                }
+                
+                let new_via = format!(
+                    "SIP/2.0/UDP {}:{};branch={};rport;received={}",
+                    config.listen_addr.ip(), config.listen_addr.port(),
+                    extract_branch_from_via(&original_via).unwrap_or_else(|| "sentiric-gateway".to_string()),
+                    remote_addr.ip()
+                );
+                
+                let modified_packet = packet_str.replacen(&original_via, &new_via, 1);
+        
+                if let Err(e) = sock.send_to(modified_packet.as_bytes(), target_addr).await {
+                    error!(error = %e, "Modifiye edilmiş paket sinyal servisine yönlendirilemedi.");
+                }
+            } else {
+                warn!("Via başlığı olmayan paket geldi, atlanıyor.");
+            }
         }
     } else {
-        warn!("Call-ID veya CSeq bulunamayan paket istemciden geldi, atlanıyor.");
+        warn!("Call-ID veya CSeq bulunamayan paket geldi, atlanıyor.");
     }
 }
+
+// --- Ekstra yardımcı fonksiyonlar ---
+fn extract_call_id(packet: &str) -> Option<String> {
+    extract_header_value(packet, "Call-ID")
+}
+fn extract_call_id_from_via(via: &str) -> Option<String> {
+    extract_header_value(&format!("Via: {}", via), "Call-ID")
+}
+
 
 #[instrument(skip_all, fields(call_id, method))]
 async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, transactions: &Transactions) {
