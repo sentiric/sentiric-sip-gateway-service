@@ -22,9 +22,13 @@ type Transactions = Arc<Mutex<HashMap<TransactionKey, TransactionInfo>>>;
 
 #[derive(Debug)]
 struct AppConfig {
-    listen_addr: SocketAddr,
-    target_addr: String,
-    env: String,
+    pub listen_addr: SocketAddr,
+    pub target_addr: String,
+    pub env: String,
+    // YENİ: Versiyon Bilgisi
+    pub service_version: String,
+    pub git_commit: String,
+    pub build_date: String,
 }
 
 fn load_config() -> Result<AppConfig> {
@@ -38,7 +42,20 @@ fn load_config() -> Result<AppConfig> {
     let listen_addr = listen_addr_str.parse::<SocketAddr>().with_context(|| format!("Geçersiz dinleme adresi: {}", listen_addr_str))?;
     let target_addr = format!("{}:{}", target_host, target_port);
 
-    Ok(AppConfig { listen_addr, target_addr, env })
+    // YENİ: Build-time environment değişkenlerini oku
+    let service_version = env::var("SERVICE_VERSION").unwrap_or_else(|_| "0.1.0".to_string());
+    let git_commit = env::var("GIT_COMMIT").unwrap_or_else(|_| "unknown".to_string());
+    let build_date = env::var("BUILD_DATE").unwrap_or_else(|_| "unknown".to_string());
+
+
+    Ok(AppConfig { 
+        listen_addr, 
+        target_addr, 
+        env,
+        service_version,
+        git_commit,
+        build_date,
+    })
 }
 
 #[tokio::main]
@@ -59,8 +76,16 @@ async fn main() {
     } else {
         subscriber_builder.json().with_current_span(true).with_span_list(true).init();
     }
-
-    info!(config = ?config, "✅ SIP Gateway başlatılıyor...");
+    
+    // YENİ: Başlangıçta versiyon bilgisini logla
+    info!(
+        service_name = "sentiric-sip-gateway-service",
+        version = %config.service_version,
+        commit = %config.git_commit,
+        build_date = %config.build_date,
+        profile = %config.env,
+        "🚀 Servis başlatılıyor..."
+    );
 
     let sock = Arc::new(UdpSocket::bind(config.listen_addr).await.unwrap_or_else(|e| {
         error!(address = %config.listen_addr, error = %e, "UDP porta bağlanılamadı.");
@@ -124,7 +149,7 @@ async fn handle_request_from_client(
                 "SIP/2.0/UDP {}:{};branch={};rport;received={}",
                 config.listen_addr.ip(),
                 config.listen_addr.port(),
-                extract_branch_from_via(&original_via).unwrap_or_else(|| "z9hG4bK-gateway".to_string()),
+                extract_branch_from_via(&original_via).unwrap_or_else(|| "sentiric-gateway".to_string()),
                 remote_addr.ip()
             );
             // --- DEĞİŞİKLİK SONU ---
