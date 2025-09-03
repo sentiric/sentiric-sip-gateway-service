@@ -133,11 +133,20 @@ async fn handle_request(
             IpAddr::V6(ipv6) => ipv6.is_loopback(),
         };
 
-        if is_internal_request { // `signaling`'den gelen istekler (örn: BYE)
-            info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "⬅️  Sinyal servisinden giden istek alındı (örn: BYE).");
-            let transactions_guard = transactions.lock().await;
+        // ================= KRİTİK MANTIK DEĞİŞİKLİĞİ =================
+        if is_internal_request { 
+            // Bu blok, SADECE sip-signaling gibi İÇ servislerden gelen istekleri ele alır.
+            // Bu istekler, DIŞARI yönlendirilecek isteklerdir (örn: BYE).
+            info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "⬅️  İç servisten DIŞARIYA gidecek istek alındı.");
+
+            // DÖNGÜ KIRICI: İçeriden bir INVITE geliyorsa, bu bir yönlendirme hatasıdır.
+            if method == "INVITE" {
+                warn!("YÖNLENDİRME DÖNGÜSÜ TESPİT EDİLDİ! İç ağdan gelen INVITE isteği işlenmeyecek.");
+                return; // Döngüyü burada kır.
+            }
             
-            // BYE gibi istekler için doğru oturumu bul
+            // Eğer istek BYE ise, doğru işlemi bul ve telekoma yönlendir.
+            let transactions_guard = transactions.lock().await;
             if let Some(tx_info) = transactions_guard.get(&(call_id, "INVITE".to_string())) {
                  let modified_packet = packet_str.replacen(extract_header_value(packet_str, "Via").unwrap_or_default().as_str(), &tx_info.original_via_header, 1);
                  if let Err(e) = sock.send_to(modified_packet.as_bytes(), tx_info.original_client_addr).await {
@@ -146,10 +155,12 @@ async fn handle_request(
                     info!(target = %tx_info.original_client_addr, "Giden istek telekoma başarıyla yönlendirildi.");
                  }
             } else {
-                 warn!("Giden istekle (örn: BYE) eşleşen aktif INVITE işlemi bulunamadı. Yönlendirilemiyor.");
+                 warn!("Giden istekle eşleşen aktif INVITE işlemi bulunamadı. Yönlendirilemiyor.");
             }
-        } else { // Dış dünyadan (client/telekom) gelen istekler
-            info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "➡️  İstemciden istek alındı.");
+        } else { 
+            // Bu blok, DIŞ dünyadan (telekom/istemci) gelen istekleri ele alır.
+            // Bu istekler, İÇERİYE (sip-signaling) yönlendirilecektir.
+            info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "➡️  Dış istemciden İÇERİYE gelen istek alındı.");
             if let Some(original_via) = extract_header_value(packet_str, "Via") {
                 let mut transactions_guard = transactions.lock().await;
                 let tx_key = (call_id, cseq_method);
