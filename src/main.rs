@@ -158,15 +158,17 @@ async fn handle_request(
                  warn!("Giden istekle eşleşen aktif INVITE işlemi bulunamadı. Yönlendirilemiyor.");
             }
         } else { 
-            // Bu blok, DIŞ dünyadan (telekom/istemci) gelen istekleri ele alır.
-            // Bu istekler, İÇERİYE (sip-signaling) yönlendirilecektir.
+            // === YENİ MANTIK: DIŞARIDAN GELEN BYE'I İŞLEME ===
+            // Dış dünyadan (telekom) bir BYE gelirse, bunu da bir işlem olarak kaydetmeliyiz ki,
+            // sip-signaling'den gelecek 200 OK yanıtını geri gönderebilelim.
             info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "➡️  Dış istemciden İÇERİYE gelen istek alındı.");
             if let Some(original_via) = extract_header_value(packet_str, "Via") {
                 let mut transactions_guard = transactions.lock().await;
                 let tx_key = (call_id, cseq_method);
         
+                // İster INVITE olsun, ister BYE, yeni bir işlemse kaydet.
                 if !transactions_guard.contains_key(&tx_key) {
-                    info!("Yeni bir SIP işlemi için kayıt oluşturuluyor.");
+                    info!("Yeni bir SIP işlemi için kayıt oluşturuluyor (Metot: {}).", method);
                     transactions_guard.insert(tx_key, TransactionInfo {
                         original_client_addr: remote_addr,
                         original_via_header: original_via.clone(),
@@ -203,7 +205,9 @@ async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, tran
         Span::current().record("method", &cseq_method as &str);
 
         info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "⬅️  Sinyal servisinden yanıt alındı.");
-        let transactions_guard = transactions.lock().await;
+        
+        // === GÜÇLENDİRİLMİŞ MANTIK ===
+        let mut transactions_guard = transactions.lock().await;
         
         let tx_key = (call_id, cseq_method);
         if let Some(tx_info) = transactions_guard.get(&tx_key) {
@@ -211,10 +215,20 @@ async fn handle_response_from_signaling(packet_str: &str, sock: &UdpSocket, tran
                 let modified_packet = packet_str.replacen(&server_via, &tx_info.original_via_header, 1);
                 if let Err(e) = sock.send_to(modified_packet.as_bytes(), tx_info.original_client_addr).await {
                     error!(error = %e, target_addr = %tx_info.original_client_addr, "Yanıt istemciye yönlendirilemedi.");
+                } else {
+                    info!(target = %tx_info.original_client_addr, "Yanıt başarıyla istemciye yönlendirildi.");
                 }
             } else {
                 warn!("Yanıtta Via başlığı yok, paket değiştirilemedi.");
             }
+            
+            // Eğer yanıt bir BYE isteğine karşılık 200 OK ise, bu işlem artık tamamlanmıştır.
+            // Hafızadan temizleyebiliriz.
+            if packet_str.contains("SIP/2.0 200 OK") && cseq_method == "BYE" {
+                info!("BYE işlemi başarıyla tamamlandı, işlem kaydı siliniyor.");
+                transactions_guard.remove(&tx_key);
+            }
+
         } else {
             warn!("İşlem bulunamadı, yanıt yönlendirilemedi.");
         }
