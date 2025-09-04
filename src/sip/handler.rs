@@ -1,4 +1,4 @@
-// File: src/sip/handler.rs
+// File: src/sip/handler.rs (TAM KOD)
 use crate::config::AppConfig;
 use crate::sip::processor::{
     self, extract_header_value, extract_transaction_key,
@@ -57,6 +57,9 @@ async fn handle_request(
     }
 }
 
+// =========================================================================
+//   DEĞİŞİKLİK BURADA: Yinelenen INVITE'ları filtreleme mantığı eklendi.
+// =========================================================================
 async fn handle_inbound_request(
     packet_str: &str,
     remote_addr: SocketAddr,
@@ -67,6 +70,16 @@ async fn handle_inbound_request(
     cseq_method: String,
 ) {
     if cseq_method == "INVITE" {
+        let guard = transactions.lock().await;
+        // Eğer bu INVITE için zaten bir işlem varsa, bu yinelenen bir pakettir.
+        // Tekrar işleme almadan atla.
+        if guard.contains_key(&(call_id.clone(), cseq_method.clone())) {
+            debug!("Yinelenen INVITE isteği alındı, atlanıyor.");
+            return;
+        }
+        // Mutex'i serbest bırak.
+        drop(guard);
+        
         info!("➡️ Gelen çağrı (INVITE) isteği alınıyor.");
     }
 
@@ -94,10 +107,10 @@ async fn handle_inbound_request(
         warn!("Gelen istek yeniden yazılamadı (başlıklar eksik olabilir).");
     }
 }
+// =========================================================================
+//                               DEĞİŞİKLİK SONU
+// =========================================================================
 
-// =========================================================================
-//   SADELEŞTİRİLMİŞ FONKSİYON: Artık sadece processor'ı çağırıyor.
-// =========================================================================
 async fn handle_outbound_request(
     packet_str: &str,
     sock: &Arc<UdpSocket>,
@@ -116,7 +129,6 @@ async fn handle_outbound_request(
         let modified_packet = processor::rewrite_outbound_request(packet_str, &invite_tx, config);
         let target_addr = invite_tx.original_client_addr;
         
-        // Yanıtı (200 OK for BYE) doğru şekilde işleyebilmek için yeni bir transaction oluştur.
         guard.insert(
             (call_id, cseq_method),
             invite_tx,
@@ -132,9 +144,6 @@ async fn handle_outbound_request(
         warn!("Giden istekle eşleşen aktif INVITE işlemi bulunamadı. İstek atlanıyor.");
     }
 }
-// =========================================================================
-//                               DEĞİŞİKLİK SONU
-// =========================================================================
 
 async fn handle_response(
     packet_str: &str,

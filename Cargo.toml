@@ -11,3 +11,4 @@ dotenvy = "0.15"
 # Hata yönetimi için standart kütüphaneler
 anyhow = "1.0"
 thiserror = "1.0"
+rand = "0.8" # YENİ SATIR
