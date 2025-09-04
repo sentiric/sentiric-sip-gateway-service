@@ -82,10 +82,27 @@ async fn handle_inbound_request(
             if let (Some(via), Some(contact)) = (extract_header_value(packet_str, "Via"), extract_header_value(packet_str, "Contact")) {
                 
                 // =========================================================================
-                //   SON DOKUNUŞ: Operatör uyumluluğu için yazım hatasını düzeltiyoruz.
+                //   PRAGMATİK UYUMLULUK DÜZELTMESİ (OPERATÖR KAYNAKLI)
                 // =========================================================================
+                // Bazı telekom operatörlerinin (testlerde Sippy Softswitch v2021-PRODUCTION.408)
+                // `Record-Route` başlığında "transport" yerine "trasport" yazım hatası yaptığı gözlemlenmiştir.
+                // Bu hatalı parametre, giden BYE isteğimizde `Route` başlığı olarak geri
+                // gönderildiğinde operatör tarafından reddedilmekteydi (`475 Bad URI`).
+                // Gateway olarak, bu bilinen hatayı proaktif olarak düzelterek uyumluluğu artırıyoruz.
                 let record_route = extract_header_value(packet_str, "Record-Route")
-                    .map(|rr| rr.replace("trasport=", "transport="));
+                    .map(|rr| {
+                        // TS_KAREL_TRUST ve TS_ROITEL_TRUST operatörleri (şimdilik bilinenler)
+                        // `trasport=udp` şeklinde hatalı bir Record-Route başlığı gönderiyor.
+                        // Bu hatayı düzeltiyoruz.
+                        let fixed_rr = rr.replace("trasport=", "transport=");
+                        warn!(
+                            source = %remote_addr,
+                            original_record_route = %rr,
+                            fixed_record_route = %fixed_rr,
+                            "Gelen Record-Route başlığında 'trasport' yazım hatası tespit edildi, düzeltiliyor."
+                        );
+                        fixed_rr
+                    });
                 // =========================================================================
 
                 let mut guard = transactions.lock().await;
