@@ -28,14 +28,30 @@ impl<'a> MessageBuilder<'a> {
 
         let method = self.get_method();
 
-        // Önce Route başlığını ekle, çünkü bu Request-URI'yı etkileyebilir.
+        // =========================================================================
+        //   SON DEĞİŞİKLİK BURADA: Request-URI'ı yeniden yazmayı durduruyoruz.
+        // =========================================================================
+        
+        // 1. Eğer INVITE'ta Record-Route varsa, bunu giden isteğe Route başlığı olarak ekle.
         self.add_route_header();
         
-        self.rewrite_request_uri(&method);
+        // 2. Request-URI'ı DOKUNMA! `sip-signaling` tarafından doğru şekilde ayarlandığını varsayıyoruz.
+        // self.rewrite_request_uri(&method); // <<< BU SATIRI YORUMA AL VEYA SİL
+
+        // 3. Via başlığını sıfırdan oluştur.
         self.rewrite_via_header();
+
+        // 4. Contact başlığını gateway'in public adresiyle değiştir.
         self.rewrite_contact_header();
+
+        // 5. Max-Forwards'ı standart bir değere ayarla.
         self.set_header("Max-Forwards", "70");
+
+        // 6. İçerik uzunluğunu garantile.
         self.ensure_content_length(&method);
+        // =========================================================================
+        //                               DEĞİŞİKLİK SONU
+        // =========================================================================
         
         self.finalize()
     }
@@ -53,14 +69,13 @@ impl<'a> MessageBuilder<'a> {
     fn add_route_header(&mut self) {
         if let Some(record_route) = &self.invite_tx.record_route_header {
             let route_header = format!("Route: {}", record_route);
-            // Mevcut Route başlıklarını temizle (eğer varsa).
             self.lines.retain(|line| !line.to_lowercase().starts_with("route:"));
-            // Request-URI'dan hemen sonra (ikinci satıra) eklemek standarttır.
             self.lines.insert(1, route_header);
         }
     }
     
-    /// Request-URI'ı (ilk satır) orijinal INVITE'taki Contact ile değiştirir.
+    // BU FONKSİYONU ARTIK KULLANMIYORUZ AMA İLERİDE LAZIM OLABİLİR DİYE BIRAKIYORUM.
+    #[allow(dead_code)]
     fn rewrite_request_uri(&mut self, method: &str) {
         self.lines[0] = format!("{} {} SIP/2.0", method, self.invite_tx.original_contact_header);
     }
