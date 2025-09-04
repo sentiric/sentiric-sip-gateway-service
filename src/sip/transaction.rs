@@ -11,6 +11,8 @@ pub struct TransactionInfo {
     pub original_client_addr: SocketAddr,
     pub original_via_header: String,
     pub original_contact_header: String,
+    // YENİ ALAN: INVITE'taki Record-Route başlığını saklamak için.
+    pub record_route_header: Option<String>,
     pub created_at: Instant,
 }
 

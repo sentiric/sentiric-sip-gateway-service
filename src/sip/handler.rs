@@ -1,4 +1,4 @@
-// File: src/sip/handler.rs (TAM KOD)
+// File: src/sip/handler.rs
 use crate::config::AppConfig;
 use crate::sip::processor::{
     self, extract_header_value, extract_transaction_key,
@@ -57,9 +57,6 @@ async fn handle_request(
     }
 }
 
-// =========================================================================
-//   DEĞİŞİKLİK BURADA: Yinelenen INVITE'ları filtreleme mantığı eklendi.
-// =========================================================================
 async fn handle_inbound_request(
     packet_str: &str,
     remote_addr: SocketAddr,
@@ -71,13 +68,10 @@ async fn handle_inbound_request(
 ) {
     if cseq_method == "INVITE" {
         let guard = transactions.lock().await;
-        // Eğer bu INVITE için zaten bir işlem varsa, bu yinelenen bir pakettir.
-        // Tekrar işleme almadan atla.
         if guard.contains_key(&(call_id.clone(), cseq_method.clone())) {
             debug!("Yinelenen INVITE isteği alındı, atlanıyor.");
             return;
         }
-        // Mutex'i serbest bırak.
         drop(guard);
         
         info!("➡️ Gelen çağrı (INVITE) isteği alınıyor.");
@@ -85,7 +79,10 @@ async fn handle_inbound_request(
 
     if let Some(modified_packet) = processor::rewrite_inbound_request(packet_str, remote_addr, config) {
         if cseq_method == "INVITE" {
+            // Record-Route başlığını da alıyoruz.
             if let (Some(via), Some(contact)) = (extract_header_value(packet_str, "Via"), extract_header_value(packet_str, "Contact")) {
+                let record_route = extract_header_value(packet_str, "Record-Route");
+                
                 let mut guard = transactions.lock().await;
                 guard.insert(
                     (call_id, cseq_method),
@@ -93,6 +90,7 @@ async fn handle_inbound_request(
                         original_client_addr: remote_addr,
                         original_via_header: via,
                         original_contact_header: contact,
+                        record_route_header: record_route, // Yeni alanı doldur
                         created_at: Instant::now(),
                     },
                 );
@@ -107,9 +105,6 @@ async fn handle_inbound_request(
         warn!("Gelen istek yeniden yazılamadı (başlıklar eksik olabilir).");
     }
 }
-// =========================================================================
-//                               DEĞİŞİKLİK SONU
-// =========================================================================
 
 async fn handle_outbound_request(
     packet_str: &str,
