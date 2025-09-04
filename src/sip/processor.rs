@@ -1,10 +1,11 @@
 // File: src/sip/processor.rs
 use crate::config::AppConfig;
-use crate::sip::message_builder::MessageBuilder; // YENİ: MessageBuilder'ı dahil et
+use crate::sip::message_builder::MessageBuilder;
 use crate::sip::transaction::TransactionInfo;
 use std::net::SocketAddr;
 use tracing::warn;
 
+// ... rewrite fonksiyonları aynı kalır ...
 pub fn rewrite_inbound_request(
     packet_str: &str,
     remote_addr: SocketAddr,
@@ -23,9 +24,6 @@ pub fn rewrite_inbound_request(
     Some(packet_str.replacen(&original_via, &new_via, 1))
 }
 
-// =========================================================================
-//   SADELEŞTİRİLMİŞ FONKSİYON: Artık sadece MessageBuilder kullanıyor.
-// =========================================================================
 pub fn rewrite_outbound_request(
     packet_str: &str,
     invite_tx: &TransactionInfo,
@@ -34,9 +32,6 @@ pub fn rewrite_outbound_request(
     MessageBuilder::new(packet_str, invite_tx, config)
         .build_outbound_request()
 }
-// =========================================================================
-//                               DEĞİŞİKLİK SONU
-// =========================================================================
 
 pub fn rewrite_outbound_response(
     packet_str: &str,
@@ -59,19 +54,35 @@ pub fn rewrite_outbound_response(
     modified_packet
 }
 
-// --- Helper Fonksiyonlar (Değişiklik Yok) ---
+// YENİ: Hem Call-ID hem de CSeq'in ham halini döndüren fonksiyon.
+pub fn extract_full_transaction_key(packet: &str) -> Option<(String, String)> {
+    let call_id = extract_header_value(packet, "Call-ID")?;
+    let cseq_line = extract_header_value(packet, "CSeq")?;
+    Some((call_id, cseq_line))
+}
+
+
 pub fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
     let header_prefix_long = format!("{}:", header_name).to_lowercase();
-    let header_prefix_short = format!("{}:", header_name.chars().next().unwrap().to_lowercase());
-    packet
-        .lines()
-        .find(|line| {
-            let trimmed_line = line.trim().to_lowercase();
-            trimmed_line.starts_with(&header_prefix_long) ||
-            (header_name != "CSeq" && trimmed_line.starts_with(&header_prefix_short))
-        })
-        .and_then(|line| line.split_once(':'))
-        .map(|(_, value)| value.trim().to_string())
+    let header_prefix_short_str = header_name.chars().next().map(|c| format!("{}:", c).to_lowercase());
+    
+    packet.lines().find_map(|line| {
+        let trimmed_line = line.trim();
+        let lower_trimmed_line = trimmed_line.to_lowercase();
+        
+        if lower_trimmed_line.starts_with(&header_prefix_long) {
+            return trimmed_line.split_once(':').map(|(_, v)| v.trim().to_string());
+        }
+        
+        if let Some(ref prefix_short) = header_prefix_short_str {
+            // CSeq için kısa formata ('s:') izin verme
+            if header_name != "CSeq" && lower_trimmed_line.starts_with(prefix_short) {
+                return trimmed_line.split_once(':').map(|(_, v)| v.trim().to_string());
+            }
+        }
+        
+        None
+    })
 }
 
 pub fn extract_transaction_key(packet: &str) -> Option<(String, String)> {
