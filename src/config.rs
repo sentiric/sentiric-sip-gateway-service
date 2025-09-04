@@ -1,4 +1,4 @@
-// File: src/config.rs
+// File: src/config.rs (DÜZELTİLMİŞ)
 use crate::error::GatewayError;
 use std::env;
 use std::net::{IpAddr, SocketAddr};
@@ -6,7 +6,10 @@ use std::net::{IpAddr, SocketAddr};
 #[derive(Debug)]
 pub struct AppConfig {
     pub listen_addr: SocketAddr,
-    pub target_addr: SocketAddr,
+    // --- DEĞİŞİKLİK BURADA ---
+    // SocketAddr yerine String olarak saklayacağız.
+    pub target_addr: String, 
+    // --- DEĞİŞİKLİK SONU ---
     pub public_ip: IpAddr,
     pub public_port: u16,
     pub env: String,
@@ -25,8 +28,11 @@ impl AppConfig {
         
         let target_host = env::var("SIP_SIGNALING_SERVICE_HOST").map_err(|_| GatewayError::ConfigError("ZORUNLU: SIP_SIGNALING_SERVICE_HOST eksik".to_string()))?;
         let target_port = env::var("SIP_SIGNALING_SERVICE_PORT").map_err(|_| GatewayError::ConfigError("ZORUNLU: SIP_SIGNALING_SERVICE_PORT eksik".to_string()))?;
-        let target_addr_str = format!("{}:{}", target_host, target_port);
-        let target_addr = target_addr_str.parse::<SocketAddr>().map_err(|_| GatewayError::ConfigError(format!("Geçersiz hedef adresi: {}", target_addr_str)))?;
+        
+        // --- DEĞİŞİKLİK BURADA ---
+        // Artık parse etmiyoruz, direkt string olarak birleştiriyoruz.
+        let target_addr = format!("{}:{}", target_host, target_port);
+        // --- DEĞİŞİKLİK SONU ---
 
         let public_ip_str = env::var("PUBLIC_IP").map_err(|_| GatewayError::ConfigError("ZORUNLU: PUBLIC_IP (gateway'in genel IP'si) eksik".to_string()))?;
         let public_ip = public_ip_str.parse::<IpAddr>().map_err(|_| GatewayError::ConfigError(format!("Geçersiz PUBLIC_IP adresi: {}", public_ip_str)))?;

@@ -81,9 +81,12 @@ async fn handle_inbound_request(
         }
 
         debug!("Paket modifiye edildi ve sinyal servisine yönlendiriliyor.");
-        if let Err(e) = sock.send_to(modified_packet.as_bytes(), config.target_addr).await {
+        // --- DEĞİŞİKLİK BURADA ---
+        // Artık target_addr bir String olduğu için referansıyla gönderiyoruz.
+        if let Err(e) = sock.send_to(modified_packet.as_bytes(), &config.target_addr).await {
             error!(error = %e, "Paket sinyal servisine yönlendirilemedi.");
         }
+        // --- DEĞİŞİKLİK SONU ---
     } else {
         warn!("Gelen istek yeniden yazılamadı (başlıklar eksik olabilir).");
     }
