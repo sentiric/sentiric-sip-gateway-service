@@ -1,4 +1,5 @@
 // File: src/sip/handler.rs
+
 use crate::config::AppConfig;
 use crate::sip::processor::{
     self, extract_header_value, extract_transaction_key,
@@ -9,6 +10,7 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::UdpSocket;
 use tracing::{debug, error, info, instrument, warn, Span};
+
 
 #[instrument(level = "debug", skip_all, fields(source = %remote_addr, call_id, method))]
 pub async fn handle_packet(
@@ -57,6 +59,7 @@ async fn handle_request(
     }
 }
 
+
 async fn handle_inbound_request(
     packet_str: &str,
     remote_addr: SocketAddr,
@@ -81,6 +84,8 @@ async fn handle_inbound_request(
         if cseq_method == "INVITE" {
             if let (Some(via), Some(contact)) = (extract_header_value(packet_str, "Via"), extract_header_value(packet_str, "Contact")) {
                 
+                let original_record_route = extract_header_value(packet_str, "Record-Route");
+                
                 // =========================================================================
                 //   PRAGMATİK UYUMLULUK DÜZELTMESİ (OPERATÖR KAYNAKLI)
                 // =========================================================================
@@ -89,8 +94,8 @@ async fn handle_inbound_request(
                 // Bu hatalı parametre, giden BYE isteğimizde `Route` başlığı olarak geri
                 // gönderildiğinde operatör tarafından reddedilmekteydi (`475 Bad URI`).
                 // Gateway olarak, bu bilinen hatayı proaktif olarak düzelterek uyumluluğu artırıyoruz.
-                let record_route = extract_header_value(packet_str, "Record-Route")
-                    .map(|rr| {
+                let record_route = match &original_record_route {
+                    Some(rr) if rr.contains("trasport=") => {
                         // TS_KAREL_TRUST ve TS_ROITEL_TRUST operatörleri (şimdilik bilinenler)
                         // `trasport=udp` şeklinde hatalı bir Record-Route başlığı gönderiyor.
                         // Bu hatayı düzeltiyoruz.
@@ -101,8 +106,11 @@ async fn handle_inbound_request(
                             fixed_record_route = %fixed_rr,
                             "Gelen Record-Route başlığında 'trasport' yazım hatası tespit edildi, düzeltiliyor."
                         );
-                        fixed_rr
-                    });
+                        Some(fixed_rr)
+                    }
+                    // Hata yoksa veya başlık hiç yoksa, olduğu gibi bırak.
+                    _ => original_record_route,
+                };
                 // =========================================================================
 
                 let mut guard = transactions.lock().await;
@@ -127,6 +135,7 @@ async fn handle_inbound_request(
         warn!("Gelen istek yeniden yazılamadı (başlıklar eksik olabilir).");
     }
 }
+
 
 async fn handle_outbound_request(
     packet_str: &str,
