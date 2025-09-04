@@ -1,14 +1,13 @@
 // File: sentiric-sip-gateway-service/src/sip/handler.rs
 use crate::config::AppConfig;
-use crate::sip::processor::{self, extract_transaction_key};
+use crate::sip::processor::{self, extract_full_transaction_key, extract_transaction_key};
 use crate::sip::transaction::{TransactionInfo, Transactions};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::UdpSocket;
-use tracing::{debug, error, info, instrument, warn, Span}; // instrument'ı import et
+use tracing::{debug, error, info, instrument, warn, Span};
 
-// DÜZELTME: Artık #[instrument] kullanıyoruz.
 #[instrument(
     name = "sip_packet",
     level = "info",
@@ -28,7 +27,7 @@ pub async fn handle_packet(
     transactions: &Transactions,
     config: &Arc<AppConfig>,
 ) {
-    if let Some((call_id, cseq_line)) = processor::extract_full_transaction_key(packet_str) {
+    if let Some((call_id, cseq_line)) = extract_full_transaction_key(packet_str) {
         Span::current().record("call_id", &call_id);
         Span::current().record("cseq", &cseq_line);
     }
@@ -57,7 +56,6 @@ async fn handle_request(
         IpAddr::V6(ipv6) => ipv6.is_loopback(),
     };
     
-    // Gelen isteğin anahtarlarını tekrar çıkarmaya gerek yok, span'e zaten eklendi.
     let (call_id, cseq_method) = extract_transaction_key(packet_str).unwrap_or_default();
 
     if is_internal_request && remote_addr.port() != config.listen_addr.port() {
@@ -114,10 +112,12 @@ async fn handle_inbound_request(
     }
 }
 
-
+// =========================================================================
+//   İŞTE DÜZELTME BURADA: `UpSocket` -> `UdpSocket`
+// =========================================================================
 async fn handle_outbound_request(
     packet_str: &str,
-    sock: &Arc<UpSocket>,
+    sock: &Arc<UdpSocket>,
     transactions: &Transactions,
     config: &Arc<AppConfig>,
     call_id: String,
@@ -166,7 +166,8 @@ async fn handle_response(
             if let Err(e) = sock.send_to(modified_packet.as_bytes(), target_addr).await {
                 error!(error = %e, "Yanıt istemciye yönlendirilemedi.");
             }
-            if cseq_method == "BYE" || cseq_method == "CANCEL" || response_line.contains(" 4") {
+            // 4xx, 5xx, 6xx serisi hatalarda da işlemi sonlandır
+            if cseq_method == "BYE" || cseq_method == "CANCEL" || response_line.contains(" 4") || response_line.contains(" 5") || response_line.contains(" 6") {
                 let mut guard = transactions.lock().await;
                 debug!("İşlem tamamlandı, ilgili kayıtlar siliniyor.");
                 guard.remove(&(tx_key.0.clone(), "INVITE".to_string()));
