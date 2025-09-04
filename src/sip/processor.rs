@@ -1,5 +1,7 @@
 // File: src/sip/processor.rs
 use crate::config::AppConfig;
+use crate::sip::message_builder::MessageBuilder; // YENİ: MessageBuilder'ı dahil et
+use crate::sip::transaction::TransactionInfo;
 use std::net::SocketAddr;
 use tracing::warn;
 
@@ -8,8 +10,6 @@ pub fn rewrite_inbound_request(
     remote_addr: SocketAddr,
     config: &AppConfig,
 ) -> Option<String> {
-    // DÜZELTME: Artık yeni `extract_header_value` sayesinde ilk Via başlığını
-    // güvenilir bir şekilde bulabiliyoruz.
     let original_via = extract_header_value(packet_str, "Via")?;
     
     let new_via = format!(
@@ -22,6 +22,21 @@ pub fn rewrite_inbound_request(
 
     Some(packet_str.replacen(&original_via, &new_via, 1))
 }
+
+// =========================================================================
+//   SADELEŞTİRİLMİŞ FONKSİYON: Artık sadece MessageBuilder kullanıyor.
+// =========================================================================
+pub fn rewrite_outbound_request(
+    packet_str: &str,
+    invite_tx: &TransactionInfo,
+    config: &AppConfig,
+) -> String {
+    MessageBuilder::new(packet_str, invite_tx, config)
+        .build_outbound_request()
+}
+// =========================================================================
+//                               DEĞİŞİKLİK SONU
+// =========================================================================
 
 pub fn rewrite_outbound_response(
     packet_str: &str,
@@ -44,40 +59,20 @@ pub fn rewrite_outbound_response(
     modified_packet
 }
 
-// --- Helper Fonksiyonlar ---
-
-// =========================================================================
-//   DEĞİŞİKLİK BURADA: Bu fonksiyon daha sağlam olacak şekilde yeniden yazıldı.
-// =========================================================================
-/// Verilen SIP paketinden belirtilen başlığın değerini ayıklar.
-/// Bu fonksiyon büyük/küçük harfe duyarsızdır, satır başı boşluklarını tolere eder
-/// ve hem tam ("Via") hem de kompakt ("v") başlık formlarını arar.
+// --- Helper Fonksiyonlar (Değişiklik Yok) ---
 pub fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
-    // Aranacak başlık isimlerini hazırla (örn: "Via:" ve "v:")
     let header_prefix_long = format!("{}:", header_name).to_lowercase();
     let header_prefix_short = format!("{}:", header_name.chars().next().unwrap().to_lowercase());
-
     packet
         .lines()
-        // Her satır için başlık kontrolü yap
         .find(|line| {
-            // Satır başı/sonu boşluklarını temizle ve küçük harfe çevir
             let trimmed_line = line.trim().to_lowercase();
-            
-            // Tam veya kısa formla eşleşip eşleşmediğini kontrol et
             trimmed_line.starts_with(&header_prefix_long) ||
-            // CSeq'in standart bir kısa formu olmadığı için bu kontrolü atla
             (header_name != "CSeq" && trimmed_line.starts_with(&header_prefix_short))
         })
-        // Bulunan satırı ':' karakterinden ikiye ayır
         .and_then(|line| line.split_once(':'))
-        // İkinci kısmı (değeri) alıp başındaki/sonundaki boşlukları temizle
         .map(|(_, value)| value.trim().to_string())
 }
-// =========================================================================
-//                               DEĞİŞİKLİK SONU
-// =========================================================================
-
 
 pub fn extract_transaction_key(packet: &str) -> Option<(String, String)> {
     let call_id = extract_header_value(packet, "Call-ID")?;
