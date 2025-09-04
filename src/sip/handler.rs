@@ -1,4 +1,4 @@
-// File: src/sip/handler.rs (UYARI 2 GİDERİLDİ VE MANTIK İYİLEŞTİRİLDİ)
+// File: src/sip/handler.rs
 use crate::config::AppConfig;
 use crate::sip::processor::{
     self, extract_header_value, extract_transaction_key,
@@ -49,7 +49,20 @@ async fn handle_request(
             handle_inbound_request(packet_str, remote_addr, sock, transactions, config, call_id, cseq_method).await;
         }
     } else {
-        warn!("Call-ID veya CSeq bulunamayan istek paketi geldi, atlanıyor.");
+        // =========================================================================
+        //   DEĞİŞİKLİK BURADA: Loglama daha detaylı hale getirildi.
+        // =========================================================================
+        // Call-ID veya CSeq olmadan işlem yapamayız. Bu durum genellikle bir
+        // ağ taraması (scan) veya bozuk bir pakettir. DEBUG seviyesinde loglayarak
+        // hem sorunu tespit edebiliriz hem de production loglarını gereksiz yere doldurmayız.
+        debug!(
+            source = %remote_addr,
+            packet_body = %packet_str,
+            "Ayrıştırılamayan paket: Call-ID veya CSeq başlığı bulunamadı. Paket atlanıyor."
+        );
+        // =========================================================================
+        //                               DEĞİŞİKLİK SONU
+        // =========================================================================
     }
 }
 
@@ -81,12 +94,9 @@ async fn handle_inbound_request(
         }
 
         debug!("Paket modifiye edildi ve sinyal servisine yönlendiriliyor.");
-        // --- DEĞİŞİKLİK BURADA ---
-        // Artık target_addr bir String olduğu için referansıyla gönderiyoruz.
         if let Err(e) = sock.send_to(modified_packet.as_bytes(), &config.target_addr).await {
             error!(error = %e, "Paket sinyal servisine yönlendirilemedi.");
         }
-        // --- DEĞİŞİKLİK SONU ---
     } else {
         warn!("Gelen istek yeniden yazılamadı (başlıklar eksik olabilir).");
     }
@@ -106,15 +116,10 @@ async fn handle_outbound_request(
     if let Some(tx_info) = guard.get(&(call_id, "INVITE".to_string())) {
         let target_addr = tx_info.original_client_addr;
         
-        // --- DÜZELTME: UYARI 2 İÇİN ---
-        // Giden isteği olduğu gibi göndermek yerine, `Contact` başlığını
-        // orijinal istemcinin gönderdiği `Contact` ile değiştirelim.
-        // Bu, bazı sıkı SIP proxy'lerinin isteği reddetmesini engeller.
         let mut modified_packet = packet_str.to_string();
         if let Some(current_contact) = extract_header_value(&modified_packet, "Contact") {
              modified_packet = modified_packet.replacen(&current_contact, &tx_info.original_contact_header, 1);
         }
-        // --- DÜZELTME SONU ---
         
         debug!(%target_addr, "İstek telekom operatörüne yönlendiriliyor.");
         if let Err(e) = sock.send_to(modified_packet.as_bytes(), target_addr).await {

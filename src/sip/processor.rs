@@ -8,6 +8,8 @@ pub fn rewrite_inbound_request(
     remote_addr: SocketAddr,
     config: &AppConfig,
 ) -> Option<String> {
+    // DÜZELTME: Artık yeni `extract_header_value` sayesinde ilk Via başlığını
+    // güvenilir bir şekilde bulabiliyoruz.
     let original_via = extract_header_value(packet_str, "Via")?;
     
     let new_via = format!(
@@ -32,7 +34,6 @@ pub fn rewrite_outbound_response(
         modified_packet = modified_packet.replacen(&server_via, original_via, 1);
     }
     
-    // YENİ VE KRİTİK: Contact başlığını genel IP ile değiştirerek NAT sorununu çözüyoruz.
     if let Some(server_contact) = extract_header_value(&modified_packet, "Contact") {
          if let Some(user_part) = extract_user_from_uri(&server_contact) {
             let new_contact = format!("<sip:{}@{}:{}>", user_part, config.public_ip, config.public_port);
@@ -45,18 +46,38 @@ pub fn rewrite_outbound_response(
 
 // --- Helper Fonksiyonlar ---
 
+// =========================================================================
+//   DEĞİŞİKLİK BURADA: Bu fonksiyon daha sağlam olacak şekilde yeniden yazıldı.
+// =========================================================================
+/// Verilen SIP paketinden belirtilen başlığın değerini ayıklar.
+/// Bu fonksiyon büyük/küçük harfe duyarsızdır, satır başı boşluklarını tolere eder
+/// ve hem tam ("Via") hem de kompakt ("v") başlık formlarını arar.
 pub fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
-    let header_prefix_long = format!("\n{}:", header_name);
-    let header_prefix_short = format!("\n{}:", header_name.chars().next().unwrap().to_lowercase());
+    // Aranacak başlık isimlerini hazırla (örn: "Via:" ve "v:")
+    let header_prefix_long = format!("{}:", header_name).to_lowercase();
+    let header_prefix_short = format!("{}:", header_name.chars().next().unwrap().to_lowercase());
 
-    packet.lines()
+    packet
+        .lines()
+        // Her satır için başlık kontrolü yap
         .find(|line| {
-            let lower_line = line.to_lowercase();
-            lower_line.starts_with(&header_prefix_long.to_lowercase()) || lower_line.starts_with(&header_prefix_short)
+            // Satır başı/sonu boşluklarını temizle ve küçük harfe çevir
+            let trimmed_line = line.trim().to_lowercase();
+            
+            // Tam veya kısa formla eşleşip eşleşmediğini kontrol et
+            trimmed_line.starts_with(&header_prefix_long) ||
+            // CSeq'in standart bir kısa formu olmadığı için bu kontrolü atla
+            (header_name != "CSeq" && trimmed_line.starts_with(&header_prefix_short))
         })
+        // Bulunan satırı ':' karakterinden ikiye ayır
         .and_then(|line| line.split_once(':'))
+        // İkinci kısmı (değeri) alıp başındaki/sonundaki boşlukları temizle
         .map(|(_, value)| value.trim().to_string())
 }
+// =========================================================================
+//                               DEĞİŞİKLİK SONU
+// =========================================================================
+
 
 pub fn extract_transaction_key(packet: &str) -> Option<(String, String)> {
     let call_id = extract_header_value(packet, "Call-ID")?;
@@ -77,7 +98,6 @@ fn extract_branch_from_via(via_header: &str) -> Option<String> {
 }
 
 fn extract_user_from_uri(uri: &str) -> Option<String> {
-    // Örnek: <sip:user@host> -> user
     uri.split_once("sip:")
        .and_then(|(_, rest)| rest.split_once('@'))
        .map(|(user, _)| user.trim_start_matches('<').to_string())
