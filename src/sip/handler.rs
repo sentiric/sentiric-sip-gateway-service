@@ -80,8 +80,14 @@ async fn handle_inbound_request(
     if let Some(modified_packet) = processor::rewrite_inbound_request(packet_str, remote_addr, config) {
         if cseq_method == "INVITE" {
             if let (Some(via), Some(contact)) = (extract_header_value(packet_str, "Via"), extract_header_value(packet_str, "Contact")) {
-                let record_route = extract_header_value(packet_str, "Record-Route");
                 
+                // =========================================================================
+                //   SON DOKUNUŞ: Operatör uyumluluğu için yazım hatasını düzeltiyoruz.
+                // =========================================================================
+                let record_route = extract_header_value(packet_str, "Record-Route")
+                    .map(|rr| rr.replace("trasport=", "transport="));
+                // =========================================================================
+
                 let mut guard = transactions.lock().await;
                 guard.insert(
                     (call_id, cseq_method),
@@ -97,8 +103,6 @@ async fn handle_inbound_request(
         }
 
         debug!(to = %config.target_addr, "Paket modifiye edildi ve sinyal servisine yönlendiriliyor.");
-        // `send_to` hatası `network.rs`'deki ana loop'ta yakalanacak,
-        // bu yüzden buradaki `error!` logu sadece bilgilendirme amaçlı.
         if let Err(e) = sock.send_to(modified_packet.as_bytes(), &config.target_addr).await {
             error!(error = %e, target = %config.target_addr, "Paket sinyal servisine yönlendirilemedi. Bu hata bekleniyor olabilir.");
         }
