@@ -29,25 +29,23 @@ impl<'a> MessageBuilder<'a> {
         let method = self.get_method();
 
         // =========================================================================
-        //   SON DEĞİŞİKLİK BURADA: Request-URI'ı yeniden yazmayı durduruyoruz.
+        //   SON AYAR BURADA: Request-URI'ı Route başlığına göre ayarlıyoruz.
         // =========================================================================
         
-        // 1. Eğer INVITE'ta Record-Route varsa, bunu giden isteğe Route başlığı olarak ekle.
-        self.add_route_header();
-        
-        // 2. Request-URI'ı DOKUNMA! `sip-signaling` tarafından doğru şekilde ayarlandığını varsayıyoruz.
-        // self.rewrite_request_uri(&method); // <<< BU SATIRI YORUMA AL VEYA SİL
+        // 1. Route başlığını ekle VE Request-URI'ı bu rotaya göre güncelle.
+        //    Bu fonksiyon artık her ikisini de yapacak.
+        self.set_route_and_update_request_uri(&method);
 
-        // 3. Via başlığını sıfırdan oluştur.
+        // 2. Via başlığını sıfırdan oluştur.
         self.rewrite_via_header();
 
-        // 4. Contact başlığını gateway'in public adresiyle değiştir.
+        // 3. Contact başlığını gateway'in public adresiyle değiştir.
         self.rewrite_contact_header();
 
-        // 5. Max-Forwards'ı standart bir değere ayarla.
+        // 4. Max-Forwards'ı standart bir değere ayarla.
         self.set_header("Max-Forwards", "70");
 
-        // 6. İçerik uzunluğunu garantile.
+        // 5. İçerik uzunluğunu garantile.
         self.ensure_content_length(&method);
         // =========================================================================
         //                               DEĞİŞİKLİK SONU
@@ -65,19 +63,22 @@ impl<'a> MessageBuilder<'a> {
             .unwrap_or_else(|| "UNKNOWN".to_string())
     }
 
-    /// Eğer INVITE'ta bir Record-Route varsa, bunu giden isteğe Route başlığı olarak ekler.
-    fn add_route_header(&mut self) {
+    /// Eğer INVITE'ta bir Record-Route varsa, bunu giden isteğe Route başlığı olarak ekler
+    /// ve Request-URI'ı bu yeni rotaya göre günceller.
+    fn set_route_and_update_request_uri(&mut self, method: &str) {
         if let Some(record_route) = &self.invite_tx.record_route_header {
+            // 1. Yeni Route başlığını oluştur.
             let route_header = format!("Route: {}", record_route);
+            
+            // 2. Request-URI'ı, Route'un hedefiyle değiştir.
+            //    Bu, "strict router" uyumluluğu için kritik olabilir.
+            self.lines[0] = format!("{} {} SIP/2.0", method, record_route);
+
+            // 3. Eski Route başlıklarını temizle ve yenisini ekle.
             self.lines.retain(|line| !line.to_lowercase().starts_with("route:"));
+            // Request-URI'dan hemen sonra (ikinci satıra) eklemek standarttır.
             self.lines.insert(1, route_header);
         }
-    }
-    
-    // BU FONKSİYONU ARTIK KULLANMIYORUZ AMA İLERİDE LAZIM OLABİLİR DİYE BIRAKIYORUM.
-    #[allow(dead_code)]
-    fn rewrite_request_uri(&mut self, method: &str) {
-        self.lines[0] = format!("{} {} SIP/2.0", method, self.invite_tx.original_contact_header);
     }
     
     /// Via başlığını sıfırdan oluşturur, böylece proxy zinciri hatalarını önler.
@@ -133,6 +134,6 @@ impl<'a> MessageBuilder<'a> {
 
     /// Mesaj satırlarını standart SIP formatında (CRLF ile) birleştirir.
     fn finalize(self) -> String {
-        self.lines.join("\r\n") + "\r\n\r\n"
+        self.lines.join("\r_n") + "\r\n\r\n"
     }
 }
