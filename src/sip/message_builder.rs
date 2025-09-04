@@ -3,7 +3,6 @@ use crate::config::AppConfig;
 use crate::sip::transaction::TransactionInfo;
 use rand::Rng;
 
-/// SIP mesajlarını programatik olarak oluşturmak ve değiştirmek için bir yardımcı yapı.
 pub struct MessageBuilder<'a> {
     lines: Vec<String>,
     invite_tx: &'a TransactionInfo,
@@ -11,7 +10,6 @@ pub struct MessageBuilder<'a> {
 }
 
 impl<'a> MessageBuilder<'a> {
-    /// Mevcut bir SIP paketinden yeni bir MessageBuilder oluşturur.
     pub fn new(packet_str: &str, invite_tx: &'a TransactionInfo, config: &'a AppConfig) -> Self {
         Self {
             lines: packet_str.lines().map(String::from).collect(),
@@ -20,18 +18,25 @@ impl<'a> MessageBuilder<'a> {
         }
     }
 
-    /// Giden bir isteği (örn: BYE) yeniden oluşturur.
     pub fn build_outbound_request(mut self) -> String {
         if self.lines.is_empty() {
             return String::new();
         }
-
         let method = self.get_method();
 
-        self.set_route_and_update_request_uri(&method);
+        // 1. Route başlığını ekle (Request-URI'a dokunma!)
+        self.add_route_header();
+
+        // 2. Via başlığını sıfırdan oluştur.
         self.rewrite_via_header();
+
+        // 3. Contact başlığını gateway'in public adresiyle değiştir.
         self.rewrite_contact_header();
+
+        // 4. Max-Forwards'ı standart bir değere ayarla.
         self.set_header("Max-Forwards", "70");
+
+        // 5. İçerik uzunluğunu garantile.
         self.ensure_content_length(&method);
         
         self.finalize()
@@ -45,10 +50,9 @@ impl<'a> MessageBuilder<'a> {
             .unwrap_or_else(|| "UNKNOWN".to_string())
     }
 
-    fn set_route_and_update_request_uri(&mut self, method: &str) {
+    fn add_route_header(&mut self) {
         if let Some(record_route) = &self.invite_tx.record_route_header {
             let route_header = format!("Route: {}", record_route);
-            self.lines[0] = format!("{} {} SIP/2.0", method, record_route);
             self.lines.retain(|line| !line.to_lowercase().starts_with("route:"));
             self.lines.insert(1, route_header);
         }
@@ -98,11 +102,7 @@ impl<'a> MessageBuilder<'a> {
         self.lines.iter().position(|l| l.to_lowercase().starts_with(&prefix))
     }
 
-    // =========================================================================
-    //   YAZIM HATASI DÜZELTİLDİ: \r_n -> \r\n
-    // =========================================================================
     fn finalize(self) -> String {
         self.lines.join("\r\n") + "\r\n\r\n"
     }
-    // =========================================================================
 }
