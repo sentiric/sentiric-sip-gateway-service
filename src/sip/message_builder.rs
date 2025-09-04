@@ -24,8 +24,13 @@ impl<'a> MessageBuilder<'a> {
         }
         let method = self.get_method();
 
-        // 1. Route başlığını ekle (Request-URI'a dokunma!)
-        self.add_route_header();
+        // =========================================================================
+        //   KRİTİK DÜZELTME:
+        //   `add_route_header()` çağrısı kaldırıldı. Artık `sip-signaling`'den
+        //   gelen `Route` başlığına dokunmuyoruz. Gateway'in görevi rota
+        //   belirlemek değil, sadece ağ sınırını yönetmektir.
+        // =========================================================================
+        // self.add_route_header(); // <-- BU SATIR KALDIRILDI
 
         // 2. Via başlığını sıfırdan oluştur.
         self.rewrite_via_header();
@@ -50,6 +55,8 @@ impl<'a> MessageBuilder<'a> {
             .unwrap_or_else(|| "UNKNOWN".to_string())
     }
 
+    // Bu fonksiyon artık çağrılmıyor ancak gelecekte referans olması için bırakılabilir.
+    #[allow(dead_code)]
     fn add_route_header(&mut self) {
         if let Some(record_route) = &self.invite_tx.record_route_header {
             let route_header = format!("Route: {}", record_route);
