@@ -86,6 +86,7 @@ services:
   sip-signaling:
     build: { context: ../sentiric-sip-signaling-service }
     env_file: ["${ENV_FILE_PATH}"]
+    ports: ["${SIP_SIGNALING_SERVICE_PORT:-5061}:${SIP_SIGNALING_SERVICE_PORT:-5061}/udp"]    
     volumes: ["${CONFIG_REPO_PATH}/tls/certs:/etc/sentiric/tls:ro"]
     networks: [sentiric-net]
     restart: always
