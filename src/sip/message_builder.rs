@@ -24,24 +24,30 @@ impl<'a> MessageBuilder<'a> {
         }
         let method = self.get_method();
 
-        // =========================================================================
-        //   KRİTİK DÜZELTME:
-        //   `add_route_header()` çağrısı kaldırıldı. Artık `sip-signaling`'den
-        //   gelen `Route` başlığına dokunmuyoruz. Gateway'in görevi rota
-        //   belirlemek değil, sadece ağ sınırını yönetmektir.
-        // =========================================================================
-        // self.add_route_header(); // <-- BU SATIR KALDIRILDI
+        // Route başlığına dokunmuyoruz, signaling'den geldiği gibi iletiyoruz.
+        // Bu, 'trasport' hatasının signaling'de düzeltilip doğru iletilmesini sağlar.
 
-        // 2. Via başlığını sıfırdan oluştur.
+        // Via başlığını sıfırdan oluştur.
         self.rewrite_via_header();
 
-        // 3. Contact başlığını gateway'in public adresiyle değiştir.
-        self.rewrite_contact_header();
-
-        // 4. Max-Forwards'ı standart bir değere ayarla.
+        // =========================================================================
+        //   KRİTİK DÜZELTME: BYE veya CANCEL isteklerine Contact ekleme!
+        // =========================================================================
+        if method != "BYE" && method != "CANCEL" {
+            // Contact başlığını sadece diyalog başlatan istekler için (örn: INVITE)
+            // veya diyalog dışı istekler için (örn: REGISTER, OPTIONS) yeniden yaz.
+            self.rewrite_contact_header();
+        } else {
+            // BYE ve CANCEL'da Contact başlığı olmamalıdır.
+            // Gelen pakette varsa bile temizleyelim.
+            self.lines.retain(|line| !line.to_lowercase().starts_with("contact:"));
+        }
+        // =========================================================================
+        
+        // Max-Forwards'ı standart bir değere ayarla.
         self.set_header("Max-Forwards", "70");
 
-        // 5. İçerik uzunluğunu garantile.
+        // İçerik uzunluğunu garantile.
         self.ensure_content_length(&method);
         
         self.finalize()
@@ -53,16 +59,6 @@ impl<'a> MessageBuilder<'a> {
             .and_then(|line| line.split_whitespace().next())
             .map(String::from)
             .unwrap_or_else(|| "UNKNOWN".to_string())
-    }
-
-    // Bu fonksiyon artık çağrılmıyor ancak gelecekte referans olması için bırakılabilir.
-    #[allow(dead_code)]
-    fn add_route_header(&mut self) {
-        if let Some(record_route) = &self.invite_tx.record_route_header {
-            let route_header = format!("Route: {}", record_route);
-            self.lines.retain(|line| !line.to_lowercase().starts_with("route:"));
-            self.lines.insert(1, route_header);
-        }
     }
     
     fn rewrite_via_header(&mut self) {
@@ -97,16 +93,12 @@ impl<'a> MessageBuilder<'a> {
     }
 
     fn replace_or_add_header(&mut self, header_name: &str, new_header_line: &str) {
-        if let Some(pos) = self.find_header_position(header_name) {
+        let lower_header_name = header_name.to_lowercase();
+        if let Some(pos) = self.lines.iter().position(|l| l.to_lowercase().starts_with(&format!("{}:", lower_header_name))) {
             self.lines[pos] = new_header_line.to_string();
-        } else if let Some(pos) = self.find_header_position("cseq") {
+        } else if let Some(pos) = self.lines.iter().position(|l| l.to_lowercase().starts_with("cseq:")) {
             self.lines.insert(pos + 1, new_header_line.to_string());
         }
-    }
-
-    fn find_header_position(&self, header_name: &str) -> Option<usize> {
-        let prefix = format!("{}:", header_name).to_lowercase();
-        self.lines.iter().position(|l| l.to_lowercase().starts_with(&prefix))
     }
 
     fn finalize(self) -> String {
