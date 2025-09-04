@@ -127,49 +127,42 @@ async fn handle_request(
     if let Some((call_id, cseq_method)) = extract_transaction_key(packet_str) {
         Span::current().record("call_id", &call_id as &str);
 
-        // --- YENİ ve GÜVENLİ TİP KONTROLÜ ---
+        // --- YENİ MANTIK: İsteğin kaynağını kontrol et ---
         let is_internal_request = match remote_addr.ip() {
-            IpAddr::V4(ipv4) => ipv4.is_private() || ipv4.is_loopback(),
-            IpAddr::V6(ipv6) => ipv6.is_loopback(),
+            std::net::IpAddr::V4(ipv4) => ipv4.is_private() || ipv4.is_loopback(),
+            std::net::IpAddr::V6(ipv6) => ipv6.is_loopback(),
         };
 
-        // ================= KRİTİK MANTIK DEĞİŞİKLİĞİ =================
-        if is_internal_request { 
-            // Bu blok, SADECE sip-signaling gibi İÇ servislerden gelen istekleri ele alır.
-            // Bu istekler, DIŞARI yönlendirilecek isteklerdir (örn: BYE).
-            info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "⬅️  İç servisten DIŞARIYA gidecek istek alındı.");
+        if is_internal_request {
+            // İÇERİDEN DIŞARIYA GİDEN İSTEK (örn: sip-signaling -> telekom)
+            info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "⬅️  İç servisten DIŞARIYA gidecek istek alındı (örn: BYE).");
 
-            // DÖNGÜ KIRICI: İçeriden bir INVITE geliyorsa, bu bir yönlendirme hatasıdır.
-            if method == "INVITE" {
-                warn!("YÖNLENDİRME DÖNGÜSÜ TESPİT EDİLDİ! İç ağdan gelen INVITE isteği işlenmeyecek.");
-                return; // Döngüyü burada kır.
-            }
-            
-            // Eğer istek BYE ise, doğru işlemi bul ve telekoma yönlendir.
             let transactions_guard = transactions.lock().await;
-            if let Some(tx_info) = transactions_guard.get(&(call_id, "INVITE".to_string())) {
-                 let modified_packet = packet_str.replacen(extract_header_value(packet_str, "Via").unwrap_or_default().as_str(), &tx_info.original_via_header, 1);
+            // Bu isteğin orijinal INVITE'ını bul
+            if let Some(tx_info) = transactions_guard.get(&(call_id.clone(), "INVITE".to_string())) {
+                 // Via başlığını orijinal istemcinin gönderdiğiyle değiştirerek paketi telekoma yönlendir
+                 let modified_packet = packet_str.replacen(
+                     extract_header_value(packet_str, "Via").unwrap_or_default().as_str(), 
+                     &tx_info.original_via_header, 
+                     1
+                 );
                  if let Err(e) = sock.send_to(modified_packet.as_bytes(), tx_info.original_client_addr).await {
-                     error!(error = %e, "Giden istek (örn: BYE) telekoma yönlendirilemedi.");
+                     error!(error = %e, "Giden istek (BYE) telekoma yönlendirilemedi.");
                  } else {
-                    info!(target = %tx_info.original_client_addr, "Giden istek telekoma başarıyla yönlendirildi.");
+                    info!(target = %tx_info.original_client_addr, "Giden istek (BYE) telekoma başarıyla yönlendirildi.");
                  }
             } else {
                  warn!("Giden istekle eşleşen aktif INVITE işlemi bulunamadı. Yönlendirilemiyor.");
             }
-        } else { 
-            // === YENİ MANTIK: DIŞARIDAN GELEN BYE'I İŞLEME ===
-            // Dış dünyadan (telekom) bir BYE gelirse, bunu da bir işlem olarak kaydetmeliyiz ki,
-            // sip-signaling'den gelecek 200 OK yanıtını geri gönderebilelim.
+        } else {
+            // DIŞARIDAN İÇERİYE GELEN İSTEK (örn: telekom -> sip-signaling)
             info!(packet_preview = %&packet_str[..packet_str.len().min(70)].replace("\r\n", " "), "➡️  Dış istemciden İÇERİYE gelen istek alındı.");
             if let Some(original_via) = extract_header_value(packet_str, "Via") {
                 let mut transactions_guard = transactions.lock().await;
                 let tx_key = (call_id, cseq_method);
         
-                // İster INVITE olsun, ister BYE, yeni bir işlemse kaydet.
                 if !transactions_guard.contains_key(&tx_key) {
-                    info!("Yeni bir SIP işlemi için kayıt oluşturuluyor (Metot: {}).", method);
-                    transactions_guard.insert(tx_key, TransactionInfo {
+                    transactions_guard.insert(tx_key.clone(), TransactionInfo {
                         original_client_addr: remote_addr,
                         original_via_header: original_via.clone(),
                         created_at: Instant::now(),
