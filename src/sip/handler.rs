@@ -19,7 +19,7 @@ pub async fn handle_packet(
     config: &Arc<AppConfig>,
 ) {
     if packet_str.starts_with("SIP/2.0") {
-        handle_response(packet_str, sock, transactions, config).await;
+        handle_response(packet_str, remote_addr, sock, transactions, config).await;
     } else {
         handle_request(packet_str, remote_addr, sock, transactions, config).await;
     }
@@ -74,12 +74,11 @@ async fn handle_inbound_request(
         }
         drop(guard);
         
-        info!("➡️ Gelen çağrı (INVITE) isteği alınıyor.");
+        info!(from = %remote_addr, "➡️ Gelen çağrı (INVITE) isteği alındı.");
     }
 
     if let Some(modified_packet) = processor::rewrite_inbound_request(packet_str, remote_addr, config) {
         if cseq_method == "INVITE" {
-            // Record-Route başlığını da alıyoruz.
             if let (Some(via), Some(contact)) = (extract_header_value(packet_str, "Via"), extract_header_value(packet_str, "Contact")) {
                 let record_route = extract_header_value(packet_str, "Record-Route");
                 
@@ -90,16 +89,18 @@ async fn handle_inbound_request(
                         original_client_addr: remote_addr,
                         original_via_header: via,
                         original_contact_header: contact,
-                        record_route_header: record_route, // Yeni alanı doldur
+                        record_route_header: record_route,
                         created_at: Instant::now(),
                     },
                 );
             }
         }
 
-        debug!("Paket modifiye edildi ve sinyal servisine yönlendiriliyor.");
+        debug!(to = %config.target_addr, "Paket modifiye edildi ve sinyal servisine yönlendiriliyor.");
+        // `send_to` hatası `network.rs`'deki ana loop'ta yakalanacak,
+        // bu yüzden buradaki `error!` logu sadece bilgilendirme amaçlı.
         if let Err(e) = sock.send_to(modified_packet.as_bytes(), &config.target_addr).await {
-            error!(error = %e, "Paket sinyal servisine yönlendirilemedi.");
+            error!(error = %e, target = %config.target_addr, "Paket sinyal servisine yönlendirilemedi. Bu hata bekleniyor olabilir.");
         }
     } else {
         warn!("Gelen istek yeniden yazılamadı (başlıklar eksik olabilir).");
@@ -115,7 +116,7 @@ async fn handle_outbound_request(
     cseq_method: String,
 ) {
     if cseq_method == "BYE" {
-        info!("⬅️ Giden çağrı sonlandırma (BYE) isteği alınıyor.");
+        info!("⬅️ Sinyal servisinden çağrı sonlandırma (BYE) isteği alındı.");
     }
     
     let mut guard = transactions.lock().await;
@@ -131,17 +132,18 @@ async fn handle_outbound_request(
         
         drop(guard);
 
-        debug!(%target_addr, "Modifiye edilmiş giden istek telekoma yönlendiriliyor.");
+        debug!(to = %target_addr, "Modifiye edilmiş giden istek telekoma yönlendiriliyor.");
         if let Err(e) = sock.send_to(modified_packet.as_bytes(), target_addr).await {
-            error!(error = %e, "Giden istek telekoma yönlendirilemedi.");
+            error!(error = %e, target = %target_addr, "Giden istek telekoma yönlendirilemedi. Bu hata bekleniyor olabilir.");
         }
     } else {
-        warn!("Giden istekle eşleşen aktif INVITE işlemi bulunamadı. İstek atlanıyor.");
+        warn!(call_id = %call_id, "Giden istekle eşleşen aktif INVITE işlemi bulunamadı. İstek atlanıyor.");
     }
 }
 
 async fn handle_response(
     packet_str: &str,
+    remote_addr: SocketAddr,
     sock: &Arc<UdpSocket>,
     transactions: &Transactions,
     config: &Arc<AppConfig>,
@@ -150,11 +152,20 @@ async fn handle_response(
         Span::current().record("method", &cseq_method as &str);
         Span::current().record("call_id", &call_id as &str);
         
-        if packet_str.contains(" 200 OK") {
-            info!("⬅️ Sinyal servisinden veya telekomdan başarılı (200 OK) yanıtı alındı.");
-        } else if let Some(code) = packet_str.split_whitespace().nth(1) {
+        let response_line = packet_str.lines().next().unwrap_or("");
+
+        let is_from_signaling = match remote_addr.ip() {
+            IpAddr::V4(ipv4) => ipv4.is_private() || ipv4.is_loopback(),
+            IpAddr::V6(ipv6) => ipv6.is_loopback(),
+        };
+
+        if response_line.contains(" 200 OK") {
+            let source = if is_from_signaling { "Sinyal servisinden" } else { "Telekomdan" };
+            info!(from = %remote_addr, response = %response_line, "⬅️ {} başarılı (200 OK) yanıtı alındı.", source);
+        } else if let Some(code) = response_line.split_whitespace().nth(1) {
              if code.starts_with('4') || code.starts_with('5') || code.starts_with('6') {
-                 warn!(response_line = packet_str.lines().next().unwrap_or(""), "Hata yanıtı alındı.");
+                 let source = if is_from_signaling { "Sinyal servisinden" } else { "Telekomdan" };
+                 warn!(from = %remote_addr, response_line = %response_line, "{} hata yanıtı alındı.", source);
              }
         }
         
@@ -172,7 +183,7 @@ async fn handle_response(
             drop(guard);
 
             if let Err(e) = sock.send_to(modified_packet.as_bytes(), target_addr).await {
-                error!(error = %e, "Yanıt istemciye yönlendirilemedi.");
+                error!(error = %e, target = %target_addr, "Yanıt istemciye yönlendirilemedi. Bu hata bekleniyor olabilir.");
             }
             
             if cseq_method == "BYE" || cseq_method == "CANCEL" {

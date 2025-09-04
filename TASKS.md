@@ -1,11 +1,11 @@
-# 🛡️ Sentiric SIP Gateway Service - Görev Listesi (v2.0 - Modüler & Sağlam)
+# 🛡️ Sentiric SIP Gateway Service - Görev Listesi (v2.1 - Production'a Hazır Temel)
 
 Bu belge, `sip-gateway-service`'in geliştirme yol haritasını, tamamlanan önemli kilometre taşlarını ve gelecekteki hedeflerini tanımlar.
 
 ---
 
-### **FAZ 1: Temel Proxy ve NAT Çözümü (Tamamlanmış Görevler)**
-Bu faz, servisin temel işlevselliğini sağlayan ilk adımları içerir.
+### **FAZ 1: Temel Proxy ve NAT Çözümü (Arşivlendi)**
+Bu faz, servisin en temel işlevselliğini sağlayan ilk adımları içeriyordu ve başarıyla aşıldı.
 
 *   [x] **GW-CORE-01: UDP Sunucusu ve Paket Yönlendirme:** Gelen ham UDP paketlerini dinleme ve `sip-signaling-service`'e yönlendirme.
 *   [x] **GW-CORE-02: Temel İşlem Takibi:** `Call-ID` ve `CSeq` kullanarak istek ve yanıtları eşleştirme ve yanıtları doğru istemciye geri gönderme.
@@ -13,34 +13,38 @@ Bu faz, servisin temel işlevselliğini sağlayan ilk adımları içerir.
 
 ---
 
-### **FAZ 2: Güvenilir Çağrı Kontrolü ve SBC Yetenekleri (Mevcut Durum - Tamamlandı)**
-Bu faz, servisi basit bir proxy'den, NAT arkasındaki karmaşık çağrı senaryolarını çözebilen ve daha güvenilir hale gelen bir Session Border Controller (SBC) yeteneklerine kavuşturmayı hedefler.
+### **FAZ 2: Sağlam SBC Yetenekleri ve Production'a Hazırlık (Mevcut Durum - TAMAMLANDI)**
+Bu faz, servisi basit bir proxy'den, karmaşık çağrı senaryolarını çözebilen, dayanıklı ve profesyonel bir Oturum Sınır Denetleyicisi (SBC) haline getirmeyi hedefliyordu. **Bu faz başarıyla tamamlanmıştır.**
 
 -   **Görev ID: GW-REFACTOR-01 - Anayasa Uyumlu Modüler Mimariye Geçiş**
     -   **Durum:** ✅ **Tamamlandı**
     -   **Öncelik:** **KRİTİK**
-    -   **Problem Tanımı:** Servisin tüm mantığı tek bir `main.rs` dosyasında toplanmıştı. Bu, kodun okunmasını, bakımını ve test edilmesini zorlaştırıyordu. Ayrıca, loglama standart dışı ve gürültülüydü.
-    -   **Çözüm Stratejisi:** Kod tabanı, `config`, `error`, `network` ve `sip` (içerisinde `handler`, `processor`, `transaction`) gibi ayrı modüllere bölündü. `main.rs` sadece servisleri başlatan bir giriş noktası haline getirildi. Loglama, `INFO` seviyesini sadece kritik olaylar için kullanacak, teknik detayları ise `DEBUG` seviyesine taşıyacak şekilde yeniden düzenlendi.
-    -   **Kabul Kriterleri:**
-        -   [x] Kod, anayasadaki katmanlı mimari prensiplerine uygun olarak modüllere ayrılmıştır.
-        -   [x] Derleyici, `dead_code` veya `unused_variable` gibi uyarılar vermemektedir.
-        -   [x] `INFO` seviyesindeki loglar, bir çağrı akışını net bir şekilde takip etmeye yetecek kadar temiz ve anlamlıdır.
+    -   **Kazanım:** Kod tabanı, `config`, `error`, `network`, `sip` (içerisinde `handler`, `processor`, `transaction`, `message_builder`) gibi ayrı modüllere bölündü. Bu, bakım ve test edilebilirliği kökten iyileştirdi. Loglama, `tracing` ile endüstri standartlarına getirildi.
 
 -   **Görev ID: GW-BUG-01 - NAT (Ağ Adresi Çevrimi) Probleminin Çözülmesi**
     -   **Durum:** ✅ **Tamamlandı**
     -   **Öncelik:** **KRİTİK**
-    -   **Problem Tanımı:** Servis, iç ağdan (Docker) dış ağa (Telekom Operatörü) SIP paketleri gönderirken `Via` ve `Contact` gibi kritik başlıkları kendi **genel (public) IP adresiyle** yeniden yazmıyordu. Bu durum, operatörün `ACK` ve diğer yanıtları doğru adrese gönderememesine ve çağrıların "ulaşılamıyor" hatasıyla başarısız olmasına neden oluyordu.
-    -   **Çözüm Stratejisi:** `sip/processor.rs` modülü oluşturuldu. Bu modül artık:
-        1. Gelen `INVITE` isteklerindeki `Via` başlığını kendi genel IP'siyle güncelleyerek `sip-signaling`'e iletir.
-        2. `sip-signaling`'den gelen `200 OK` gibi yanıtlardaki `Via` ve `Contact` başlıklarını, telekom operatörünün anlayacağı şekilde orijinal istemci bilgileri ve kendi genel IP'siyle yeniden yazarak iletir.
-    -   **Kabul Kriterleri:**
-        -   [x] Bir çağrı yapıldığında, arayan kişi "ulaşılamıyor" anonsu yerine, çağrının çaldığını duymalı veya doğrudan IVR'a bağlanmalıdır.
-        -   [x] `BYE` isteği operatöre ulaştığında, operatörden artık `475 Bad URI` hatası alınmamalıdır.
+    -   **Kazanım:** `Via` ve `Contact` başlıkları, servisin genel (public) IP adresi kullanılarak akıllıca yeniden yazıldı. Bu, NAT arkasındaki platformun dış dünya ile başarılı bir şekilde iletişim kurmasını sağladı.
+
+-   **Görev ID: GW-BUG-02 - Diyalog İçi Yönlendirme (`Route` Başlığı) Sorununun Çözümü**
+    -   **Durum:** ✅ **Tamamlandı**
+    -   **Öncelik:** **KRİTİK**
+    -   **Kazanım:** Servis artık `INVITE` paketlerindeki `Record-Route` başlığını anlıyor ve saklıyor. Diyalog içindeki sonraki istekleri (`BYE` gibi), bu bilgiye dayanarak bir `Route` başlığı ile doğru bir şekilde yönlendiriyor. Bu, çağrı sonlandırma hatalarını (`475 Bad URI`) çözmüştür.
+
+-   **Görev ID: GW-ROBUST-01 - Dayanıklılık ve Graceful Shutdown**
+    -   **Durum:** ✅ **Tamamlandı**
+    -   **Öncelik:** Yüksek
+    -   **Kazanım:** Servis artık bağımlı olduğu `sip-signaling-service` gibi servisler ayakta olmadığında çökmüyor; hatayı loglayıp çalışmaya devam ediyor. Ayrıca, `Ctrl+C` (SIGINT) gibi kapatma sinyallerini yakalayarak temiz ve kontrollü bir şekilde kapanıyor (graceful shutdown).
+
+-   **Görev ID: GW-PERF-01 - Yinelenen Paket Filtreleme**
+    -   **Durum:** ✅ **Tamamlandı**
+    -   **Öncelik:** Yüksek
+    -   **Kazanım:** Gateway, telekom operatörlerinden gelen yinelenen `INVITE` isteklerini filtreleyerek `sip-signaling-service` üzerindeki gereksiz yükü engeller.
 
 ---
 
-### **FAZ 3: Güvenlik ve Dayanıklılık (Sıradaki Öncelik)**
-Bu faz, servisi platformu siber saldırılara karşı koruyan bir güvenlik kalkanına dönüştürmeyi hedefler.
+### **FAZ 3: Güvenlik ve Gelişmiş Gözlemlenebilirlik (Sıradaki Öncelik)**
+Bu faz, servisi siber saldırılara karşı koruyan bir güvenlik kalkanına dönüştürmeyi ve operasyonel takibini kolaylaştırmayı hedefler.
 
 -   [ ] **Görev ID: GW-SEC-001 - Hız Sınırlama (Rate Limiting)**
     -   **Açıklama:** Belirli bir IP adresinden saniyede gelebilecek istek sayısını sınırlayan bir "token bucket" veya benzeri bir algoritma implemente et. Bu, basit DoS (Denial-of-Service) saldırılarını önleyecektir.
@@ -48,6 +52,10 @@ Bu faz, servisi platformu siber saldırılara karşı koruyan bir güvenlik kalk
 
 -   [ ] **Görev ID: GW-SEC-002 - IP Beyaz/Kara Liste**
     -   **Açıklama:** Sadece belirli IP adreslerinden veya IP aralıklarından gelen isteklere izin veren (veya bilinen kötü niyetli IP'leri engelleyen) bir mekanizma ekle.
+    -   **Durum:** ⬜ Planlandı.
+
+-   [ ] **Görev ID: GW-OBSERV-001 - Prometheus Metrikleri**
+    -   **Açıklama:** Aktif çağrı sayısı, saniyedeki istek sayısı, hata oranları gibi kritik metrikleri bir `/metrics` endpoint'i üzerinden Prometheus formatında sun.
     -   **Durum:** ⬜ Planlandı.
 
 ---

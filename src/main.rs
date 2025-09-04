@@ -1,7 +1,9 @@
-// File: src/main.rs (YENİ VE SADELEŞTİRİLMİŞ HALİ)
+// File: src/main.rs
 use std::process;
 use std::sync::Arc;
-use tracing::{error, info};
+use tokio::select; // YENİ: Birden fazla async işlemi beklemek için
+use tokio::signal; // YENİ: İşletim sistemi sinyallerini dinlemek için
+use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
 mod config;
@@ -38,12 +40,33 @@ async fn main() {
 
     let transactions = sip::transaction::new_transaction_manager();
     
-    // Temizlik görevini başlat
-    tokio::spawn(sip::transaction::cleanup_old_transactions(transactions.clone()));
+    let cleanup_task = tokio::spawn(sip::transaction::cleanup_old_transactions(transactions.clone()));
 
     info!(listen_addr = %config.listen_addr, target_addr = %config.target_addr, "UDP dinleyici başlatılıyor...");
-    if let Err(e) = network::listen_and_process(config, transactions).await {
-        error!(error = %e, "Kritik ağ hatası, servis durduruluyor.");
-        process::exit(1);
+    let network_task = network::listen_and_process(config.clone(), transactions);
+
+    // =========================================================================
+    //   GRACEFUL SHUTDOWN MANTIĞI BURADA
+    // =========================================================================
+    select! {
+        // Ana ağ görevi bir hatayla sonlanırsa
+        res = network_task => {
+            if let Err(e) = res {
+                error!(error = %e, "Kritik ağ hatası, servis durduruluyor.");
+                process::exit(1);
+            }
+        },
+        // Veya Ctrl+C (SIGINT) sinyali alınırsa
+        _ = signal::ctrl_c() => {
+            warn!("Kapatma sinyali (Ctrl+C) alındı. Servis gracefully kapatılıyor...");
+        }
     }
+    
+    // Arka plan görevlerini iptal et
+    cleanup_task.abort();
+    
+    info!("✅ Servis başarıyla kapatıldı.");
+    // =========================================================================
+    //                               DEĞİŞİKLİK SONU
+    // =========================================================================
 }
