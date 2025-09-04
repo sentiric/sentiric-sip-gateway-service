@@ -10,8 +10,10 @@ use tracing::{info, debug};
 pub struct TransactionInfo {
     pub original_client_addr: SocketAddr,
     pub original_via_header: String,
+    // Bu alan şu anda doğrudan kullanılmıyor ama gelecekteki SIP mantığı için
+    // kritik olabilir. Bu yüzden uyarıyı susturuyoruz.
+    #[allow(dead_code)]
     pub original_contact_header: String,
-    // YENİ ALAN: INVITE'taki Record-Route başlığını saklamak için.
     pub record_route_header: Option<String>,
     pub created_at: Instant,
 }

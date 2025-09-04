@@ -28,33 +28,15 @@ impl<'a> MessageBuilder<'a> {
 
         let method = self.get_method();
 
-        // =========================================================================
-        //   SON AYAR BURADA: Request-URI'ı Route başlığına göre ayarlıyoruz.
-        // =========================================================================
-        
-        // 1. Route başlığını ekle VE Request-URI'ı bu rotaya göre güncelle.
-        //    Bu fonksiyon artık her ikisini de yapacak.
         self.set_route_and_update_request_uri(&method);
-
-        // 2. Via başlığını sıfırdan oluştur.
         self.rewrite_via_header();
-
-        // 3. Contact başlığını gateway'in public adresiyle değiştir.
         self.rewrite_contact_header();
-
-        // 4. Max-Forwards'ı standart bir değere ayarla.
         self.set_header("Max-Forwards", "70");
-
-        // 5. İçerik uzunluğunu garantile.
         self.ensure_content_length(&method);
-        // =========================================================================
-        //                               DEĞİŞİKLİK SONU
-        // =========================================================================
         
         self.finalize()
     }
 
-    /// Paketin ilk satırından metodu (örn: "BYE") alır.
     fn get_method(&self) -> String {
         self.lines
             .first()
@@ -63,25 +45,15 @@ impl<'a> MessageBuilder<'a> {
             .unwrap_or_else(|| "UNKNOWN".to_string())
     }
 
-    /// Eğer INVITE'ta bir Record-Route varsa, bunu giden isteğe Route başlığı olarak ekler
-    /// ve Request-URI'ı bu yeni rotaya göre günceller.
     fn set_route_and_update_request_uri(&mut self, method: &str) {
         if let Some(record_route) = &self.invite_tx.record_route_header {
-            // 1. Yeni Route başlığını oluştur.
             let route_header = format!("Route: {}", record_route);
-            
-            // 2. Request-URI'ı, Route'un hedefiyle değiştir.
-            //    Bu, "strict router" uyumluluğu için kritik olabilir.
             self.lines[0] = format!("{} {} SIP/2.0", method, record_route);
-
-            // 3. Eski Route başlıklarını temizle ve yenisini ekle.
             self.lines.retain(|line| !line.to_lowercase().starts_with("route:"));
-            // Request-URI'dan hemen sonra (ikinci satıra) eklemek standarttır.
             self.lines.insert(1, route_header);
         }
     }
     
-    /// Via başlığını sıfırdan oluşturur, böylece proxy zinciri hatalarını önler.
     fn rewrite_via_header(&mut self) {
         let branch: String = rand::thread_rng()
             .sample_iter(&rand::distributions::Alphanumeric)
@@ -97,43 +69,40 @@ impl<'a> MessageBuilder<'a> {
         self.replace_or_add_header("via", &new_via);
     }
 
-    /// Contact başlığını gateway'in public IP adresiyle yeniden yazar veya ekler.
     fn rewrite_contact_header(&mut self) {
         let new_contact = format!("Contact: <sip:sentiric@{}:{}>", self.config.public_ip, self.config.public_port);
         self.replace_or_add_header("contact", &new_contact);
     }
 
-    /// BYE gibi gövdesiz mesajlar için Content-Length: 0 başlığını garantiler.
     fn ensure_content_length(&mut self, method: &str) {
         if method == "BYE" || method == "CANCEL" {
             self.set_header("Content-Length", "0");
         }
     }
     
-    /// Belirtilen bir başlığı ayarlar (varsa değiştirir, yoksa ekler).
     fn set_header(&mut self, header_name: &str, value: &str) {
         let new_header = format!("{}: {}", header_name, value);
         self.replace_or_add_header(header_name, &new_header);
     }
 
-    /// Bir başlığı değiştiren veya ekleyen yardımcı fonksiyon.
     fn replace_or_add_header(&mut self, header_name: &str, new_header_line: &str) {
         if let Some(pos) = self.find_header_position(header_name) {
             self.lines[pos] = new_header_line.to_string();
         } else if let Some(pos) = self.find_header_position("cseq") {
-            // CSeq'ten sonra eklemek mantıklı bir varsayım.
             self.lines.insert(pos + 1, new_header_line.to_string());
         }
     }
 
-    /// Belirtilen başlığın satır indeksini bulur (büyük/küçük harfe duyarsız).
     fn find_header_position(&self, header_name: &str) -> Option<usize> {
         let prefix = format!("{}:", header_name).to_lowercase();
         self.lines.iter().position(|l| l.to_lowercase().starts_with(&prefix))
     }
 
-    /// Mesaj satırlarını standart SIP formatında (CRLF ile) birleştirir.
+    // =========================================================================
+    //   YAZIM HATASI DÜZELTİLDİ: \r_n -> \r\n
+    // =========================================================================
     fn finalize(self) -> String {
-        self.lines.join("\r_n") + "\r\n\r\n"
+        self.lines.join("\r\n") + "\r\n\r\n"
     }
+    // =========================================================================
 }
