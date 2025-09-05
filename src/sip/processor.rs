@@ -5,7 +5,7 @@ use crate::sip::transaction::TransactionInfo;
 use std::net::SocketAddr;
 use tracing::warn;
 
-// ... rewrite fonksiyonları aynı kalır ...
+
 pub fn rewrite_inbound_request(
     packet_str: &str,
     remote_addr: SocketAddr,
@@ -50,17 +50,30 @@ pub fn rewrite_outbound_response(
             modified_packet = modified_packet.replacen(&server_contact, &new_contact, 1);
         }
     }
+    
+    // =========================================================================
+    //   YENİ: Giden tüm yanıtlara kendi Server başlığımızı ekleyelim.
+    // =========================================================================
+    let server_header = format!("Server: Sentiric Gateway Service v{}", config.service_version);
+    if let Some(existing_server) = extract_header_value(&modified_packet, "Server") {
+        modified_packet = modified_packet.replace(&existing_server, &server_header);
+    } else {
+        // Eğer Server başlığı yoksa, CSeq'ten sonra ekleyelim.
+        if let Some(cseq) = extract_header_value(&modified_packet, "CSeq") {
+             modified_packet = modified_packet.replace(&cseq, &format!("{}\r\n{}", cseq, server_header));
+        }
+    }
+    // =========================================================================
 
     modified_packet
 }
 
-// YENİ: Hem Call-ID hem de CSeq'in ham halini döndüren fonksiyon.
+
 pub fn extract_full_transaction_key(packet: &str) -> Option<(String, String)> {
     let call_id = extract_header_value(packet, "Call-ID")?;
     let cseq_line = extract_header_value(packet, "CSeq")?;
     Some((call_id, cseq_line))
 }
-
 
 pub fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
     let header_prefix_long = format!("{}:", header_name).to_lowercase();
@@ -75,7 +88,6 @@ pub fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
         }
         
         if let Some(ref prefix_short) = header_prefix_short_str {
-            // CSeq için kısa formata ('s:') izin verme
             if header_name != "CSeq" && lower_trimmed_line.starts_with(prefix_short) {
                 return trimmed_line.split_once(':').map(|(_, v)| v.trim().to_string());
             }
