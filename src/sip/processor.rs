@@ -33,6 +33,7 @@ pub fn rewrite_outbound_request(
         .build_outbound_request()
 }
 
+
 pub fn rewrite_outbound_response(
     packet_str: &str,
     original_via: &str,
@@ -52,15 +53,17 @@ pub fn rewrite_outbound_response(
     }
     
     // =========================================================================
-    //   YENİ: Giden tüm yanıtlara kendi Server başlığımızı ekleyelim.
+    //   YAPILACAK EKLEME BURASI
+    //   Giden tüm yanıtlara kendi Server başlığımızı ekleyelim.
     // =========================================================================
     let server_header = format!("Server: Sentiric Gateway Service v{}", config.service_version);
-    if let Some(existing_server) = extract_header_value(&modified_packet, "Server") {
-        modified_packet = modified_packet.replace(&existing_server, &server_header);
+    if let Some(existing_server_line) = find_header_line(&modified_packet, "Server") {
+        // Mevcut Server başlığını bizimkiyle değiştiriyoruz.
+        modified_packet = modified_packet.replace(&existing_server_line, &server_header);
     } else {
         // Eğer Server başlığı yoksa, CSeq'ten sonra ekleyelim.
-        if let Some(cseq) = extract_header_value(&modified_packet, "CSeq") {
-             modified_packet = modified_packet.replace(&cseq, &format!("{}\r\n{}", cseq, server_header));
+        if let Some(cseq_line) = find_header_line(&modified_packet, "CSeq") {
+             modified_packet = modified_packet.replace(&cseq_line, &format!("{}\r\n{}", cseq_line, server_header));
         }
     }
     // =========================================================================
@@ -75,27 +78,19 @@ pub fn extract_full_transaction_key(packet: &str) -> Option<(String, String)> {
     Some((call_id, cseq_line))
 }
 
-pub fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
-    let header_prefix_long = format!("{}:", header_name).to_lowercase();
-    let header_prefix_short_str = header_name.chars().next().map(|c| format!("{}:", c).to_lowercase());
-    
-    packet.lines().find_map(|line| {
-        let trimmed_line = line.trim();
-        let lower_trimmed_line = trimmed_line.to_lowercase();
-        
-        if lower_trimmed_line.starts_with(&header_prefix_long) {
-            return trimmed_line.split_once(':').map(|(_, v)| v.trim().to_string());
-        }
-        
-        if let Some(ref prefix_short) = header_prefix_short_str {
-            if header_name != "CSeq" && lower_trimmed_line.starts_with(prefix_short) {
-                return trimmed_line.split_once(':').map(|(_, v)| v.trim().to_string());
-            }
-        }
-        
-        None
-    })
+// YENİ HELPER: Sadece başlığın değerini değil, tüm satırı bulan fonksiyon
+fn find_header_line<'a>(packet: &'a str, header_name: &str) -> Option<&'a str> {
+    let header_prefix = format!("{}:", header_name).to_lowercase();
+    packet.lines().find(|line| line.trim().to_lowercase().starts_with(&header_prefix))
 }
+
+
+pub fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
+    find_header_line(packet, header_name)
+        .and_then(|line| line.split_once(':'))
+        .map(|(_, value)| value.trim().to_string())
+}
+
 
 pub fn extract_transaction_key(packet: &str) -> Option<(String, String)> {
     let call_id = extract_header_value(packet, "Call-ID")?;

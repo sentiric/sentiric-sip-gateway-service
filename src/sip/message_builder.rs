@@ -42,12 +42,16 @@ impl<'a> MessageBuilder<'a> {
             // Gelen pakette varsa bile temizleyelim.
             self.lines.retain(|line| !line.to_lowercase().starts_with("contact:"));
         }
-        // =========================================================================
         
-        // Max-Forwards'ı standart bir değere ayarla.
-        self.set_header("Max-Forwards", "70");
+        // =========================================================================
+        //   YAPILACAK EKLEME BURASI
+        //   Giden tüm isteklere kendi User-Agent başlığımızı ekleyelim.
+        // =========================================================================
+        let user_agent = format!("User-Agent: Sentiric Gateway Service v{}", self.config.service_version);
+        self.replace_or_add_header("User-Agent", &user_agent);
+        // =========================================================================
 
-        // İçerik uzunluğunu garantile.
+        self.set_header("Max-Forwards", "70");
         self.ensure_content_length(&method);
         
         self.finalize()
@@ -73,12 +77,12 @@ impl<'a> MessageBuilder<'a> {
             self.config.public_port, 
             branch
         );
-        self.replace_or_add_header("via", &new_via);
+        self.replace_or_add_header("Via", &new_via);
     }
 
     fn rewrite_contact_header(&mut self) {
         let new_contact = format!("Contact: <sip:sentiric@{}:{}>", self.config.public_ip, self.config.public_port);
-        self.replace_or_add_header("contact", &new_contact);
+        self.replace_or_add_header("Contact", &new_contact);
     }
 
     fn ensure_content_length(&mut self, method: &str) {
