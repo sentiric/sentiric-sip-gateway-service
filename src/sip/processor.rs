@@ -24,23 +24,35 @@ pub fn rewrite_inbound_request(
     Some(packet_str.replacen(&original_via, &new_via, 1))
 }
 
-pub fn rewrite_outbound_request(
+// --- YENİ VE NİHAİ DOĞRU VERSİYON ---
+pub fn rewrite_outbound_response(
     packet_str: &str,
-    invite_tx: &TransactionInfo,
-    config: &AppConfig,
+    original_via: &str,
+    config: &AppConfig
 ) -> String {
-    let mut modified_packet = MessageBuilder::new(packet_str, invite_tx, config)
-        .build_outbound_request();
+    let mut modified_packet = packet_str.to_string();
 
-    // --- YENİ EKLENEN BLOK BAŞLANGICI ---
-    // Telekom sağlayıcısının 'trasport' beklentisine uyum sağlamak için
-    // oluşturulmuş 'Route' başlığını manuel olarak düzeltiyoruz.
-    if let Some(original_rr) = &invite_tx.record_route_header {
-        if original_rr.contains("trasport=") {
-            modified_packet = modified_packet.replace("transport=udp", "trasport=udp");
+    // 1. Via başlığını orijinal istemcinin Via'sı ile değiştir. Bu zaten doğruydu.
+    if let Some(server_via) = extract_header_value(&modified_packet, "Via") {
+        modified_packet = modified_packet.replacen(&server_via, original_via, 1);
+    }
+    
+    // --- KRİTİK DEĞİŞİKLİK: Contact başlığını KENDİ genel IP'miz ile değiştiriyoruz ---
+    // Bu, ACK paketlerinin bize doğru bir şekilde ulaşmasını sağlar.
+    if let Some(server_contact_line) = find_header_line(&modified_packet, "Contact") {
+         let new_contact_line = format!("Contact: <sip:sentiric-signal@{}:{}>", config.public_ip, config.public_port);
+         modified_packet = modified_packet.replace(server_contact_line, &new_contact_line);
+    }
+    // --- DEĞİŞİKLİK SONU ---
+    
+    let server_header = format!("Server: Sentiric Gateway Service v{}", config.service_version);
+    if let Some(existing_server_line) = find_header_line(&modified_packet, "Server") {
+        modified_packet = modified_packet.replace(&existing_server_line, &server_header);
+    } else {
+        if let Some(cseq_line) = find_header_line(&modified_packet, "CSeq") {
+             modified_packet = modified_packet.replace(&cseq_line, &format!("{}\r\n{}", cseq_line, server_header));
         }
     }
-    // --- YENİ EKLENEN BLOK SONU ---
 
     modified_packet
 }
