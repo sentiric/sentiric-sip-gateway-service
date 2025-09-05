@@ -29,8 +29,20 @@ pub fn rewrite_outbound_request(
     invite_tx: &TransactionInfo,
     config: &AppConfig,
 ) -> String {
-    MessageBuilder::new(packet_str, invite_tx, config)
-        .build_outbound_request()
+    let mut modified_packet = MessageBuilder::new(packet_str, invite_tx, config)
+        .build_outbound_request();
+
+    // --- YENİ EKLENEN BLOK BAŞLANGICI ---
+    // Telekom sağlayıcısının 'trasport' beklentisine uyum sağlamak için
+    // oluşturulmuş 'Route' başlığını manuel olarak düzeltiyoruz.
+    if let Some(original_rr) = &invite_tx.record_route_header {
+        if original_rr.contains("trasport=") {
+            modified_packet = modified_packet.replace("transport=udp", "trasport=udp");
+        }
+    }
+    // --- YENİ EKLENEN BLOK SONU ---
+
+    modified_packet
 }
 
 
