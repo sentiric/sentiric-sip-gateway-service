@@ -1,4 +1,5 @@
 // File: src/sip/transaction.rs
+
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -9,11 +10,10 @@ use tracing::{info, debug};
 #[derive(Clone, Debug)]
 pub struct TransactionInfo {
     pub original_client_addr: SocketAddr,
-    pub original_via_header: String,
-    // Bu alan şu anda doğrudan kullanılmıyor ama gelecekteki SIP mantığı için
-    // kritik olabilir. Bu yüzden uyarıyı susturuyoruz.
-    #[allow(dead_code)]
+    pub original_via_headers: Vec<String>, // 'Via' başlıklarının tamamını saklar.
+    #[allow(dead_code)] // Bu alan giden BYE/CANCEL istekleri için saklanıyor.
     pub original_contact_header: String,
+    #[allow(dead_code)] // Bu alan giden BYE/CANCEL istekleri için saklanıyor.
     pub record_route_header: Option<String>,
     pub created_at: Instant,
 }

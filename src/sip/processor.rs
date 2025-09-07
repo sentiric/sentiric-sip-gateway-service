@@ -1,120 +1,95 @@
 // File: src/sip/processor.rs
+
 use crate::config::AppConfig;
-use crate::sip::message_builder::MessageBuilder;
+use crate::sip::message::SipMessage;
 use crate::sip::transaction::TransactionInfo;
 use std::net::SocketAddr;
-use tracing::warn;
+use tracing::{instrument, warn};
 
-
+/// Dış dünyadan (operatör) gelen bir isteği, iç ağdaki `signaling-service`'e
+/// iletilecek temiz bir formata dönüştürür.
+/// Bu fonksiyon, dış dünyanın karmaşık `Via` başlıklarını "yutar" ve yerine
+/// iç ağda geçerli olan, sadece gateway'in bilgisini içeren TEK bir `Via` başlığı koyar.
+#[instrument(name="rewrite_inbound", skip_all, fields(original_via_count = msg.via_headers.len()))]
 pub fn rewrite_inbound_request(
-    packet_str: &str,
+    msg: &SipMessage,
     remote_addr: SocketAddr,
     config: &AppConfig,
-) -> Option<String> {
-    let original_via = extract_header_value(packet_str, "Via")?;
-    
+) -> String {
+    let mut new_lines = vec![msg.start_line.clone()];
+
+    // Yeni ve tek Via başlığını oluştur.
+    let branch = extract_branch_from_via(&msg.via_headers.first().cloned().unwrap_or_default()).unwrap_or_default();
     let new_via = format!(
-        "SIP/2.0/UDP {}:{};branch={};rport;received={}",
+        "Via: SIP/2.0/UDP {}:{};branch={};rport;received={}",
         config.public_ip,
         config.public_port,
-        extract_branch_from_via(&original_via).unwrap_or_default(),
+        branch,
         remote_addr.ip()
     );
+    new_lines.push(new_via);
 
-    Some(packet_str.replacen(&original_via, &new_via, 1))
+    // DİKKAT: Orijinal Via başlıkları iç ağa GÖNDERİLMEZ. Topoloji gizlenir.
+    
+    // Diğer tüm başlıkları ve gövdeyi ekle.
+    for (key, value) in &msg.headers {
+        new_lines.push(format!("{}: {}", key, value));
+    }
+    
+    new_lines.push(String::new()); // Başlık ve gövde arası boş satır
+    new_lines.push(msg.body.clone());
+    
+    new_lines.join("\r\n") + "\r\n"
 }
 
-// --- YENİ VE NİHAİ DOĞRU VERSİYON ---
+/// İç ağdaki `signaling-service`'ten gelen bir yanıtı, dış dünyadaki
+/// orijinal istemciye (operatöre) gönderilecek doğru ve RFC uyumlu formata dönüştürür.
+/// Bu fonksiyon, `signaling-service`'ten gelen yanıttaki basit, tek `Via` başlığını
+/// atar ve yerine işlem başladığında kaydettiğimiz orijinal, çoklu `Via` listesini koyar.
+#[instrument(name="rewrite_outbound", skip_all, fields(original_via_count = tx_info.original_via_headers.len()))]
 pub fn rewrite_outbound_response(
     packet_str: &str,
-    original_via: &str,
-    config: &AppConfig
+    tx_info: &TransactionInfo,
+    config: &AppConfig,
 ) -> String {
-    let mut modified_packet = packet_str.to_string();
+    let mut msg = match SipMessage::parse(packet_str) {
+        Some(m) => m,
+        None => return packet_str.to_string(),
+    };
 
-    // 1. Via başlığını orijinal istemcinin Via'sı ile değiştir. Bu zaten doğruydu.
-    if let Some(server_via) = extract_header_value(&modified_packet, "Via") {
-        modified_packet = modified_packet.replacen(&server_via, original_via, 1);
-    }
-    
-    // --- KRİTİK DEĞİŞİKLİK: Contact başlığını KENDİ genel IP'miz ile değiştiriyoruz ---
-    // Bu, ACK paketlerinin bize doğru bir şekilde ulaşmasını sağlar.
-    if let Some(server_contact_line) = find_header_line(&modified_packet, "Contact") {
-         let new_contact_line = format!("Contact: <sip:sentiric-signal@{}:{}>", config.public_ip, config.public_port);
-         modified_packet = modified_packet.replace(server_contact_line, &new_contact_line);
-    }
-    // --- DEĞİŞİKLİK SONU ---
-    
-    let server_header = format!("Server: Sentiric Gateway Service v{}", config.service_version);
-    if let Some(existing_server_line) = find_header_line(&modified_packet, "Server") {
-        modified_packet = modified_packet.replace(&existing_server_line, &server_header);
-    } else {
-        if let Some(cseq_line) = find_header_line(&modified_packet, "CSeq") {
-             modified_packet = modified_packet.replace(&cseq_line, &format!("{}\r\n{}", cseq_line, server_header));
-        }
+    // Gelen yanıttaki tüm Via'ları atıp, orijinal Via listesini koyuyoruz.
+    msg.via_headers = tx_info.original_via_headers.clone();
+
+    // Contact başlığını kendi public IP'mizle güncelliyoruz.
+    if msg.headers.contains_key("Contact") {
+        let new_contact = format!("<sip:gateway@{}:{}>", config.public_ip, config.public_port);
+        msg.headers.insert("Contact".to_string(), new_contact);
     }
 
-    modified_packet
+    // Server başlığını ekle/güncelle
+    msg.headers.insert("Server".to_string(), format!("Sentiric Gateway v{}", config.service_version));
+    
+    // Mesajı yeniden birleştir
+    let mut new_lines = vec![msg.start_line];
+    new_lines.extend(msg.via_headers);
+    for (key, value) in msg.headers {
+        new_lines.push(format!("{}: {}", key, value));
+    }
+    new_lines.push(String::new());
+    new_lines.push(msg.body);
+    
+    new_lines.join("\r\n") + "\r\n"
 }
 
-
-pub fn rewrite_outbound_response(
-    packet_str: &str,
-    original_via: &str,
-    config: &AppConfig
-) -> String {
-    let mut modified_packet = packet_str.to_string();
-
-    if let Some(server_via) = extract_header_value(&modified_packet, "Via") {
-        modified_packet = modified_packet.replacen(&server_via, original_via, 1);
-    }
-    
-    if let Some(server_contact) = extract_header_value(&modified_packet, "Contact") {
-         if let Some(user_part) = extract_user_from_uri(&server_contact) {
-            let new_contact = format!("<sip:{}@{}:{}>", user_part, config.public_ip, config.public_port);
-            modified_packet = modified_packet.replacen(&server_contact, &new_contact, 1);
-        }
-    }
-    
-    // =========================================================================
-    //   YAPILACAK EKLEME BURASI
-    //   Giden tüm yanıtlara kendi Server başlığımızı ekleyelim.
-    // =========================================================================
-    let server_header = format!("Server: Sentiric Gateway Service v{}", config.service_version);
-    if let Some(existing_server_line) = find_header_line(&modified_packet, "Server") {
-        // Mevcut Server başlığını bizimkiyle değiştiriyoruz.
-        modified_packet = modified_packet.replace(&existing_server_line, &server_header);
-    } else {
-        // Eğer Server başlığı yoksa, CSeq'ten sonra ekleyelim.
-        if let Some(cseq_line) = find_header_line(&modified_packet, "CSeq") {
-             modified_packet = modified_packet.replace(&cseq_line, &format!("{}\r\n{}", cseq_line, server_header));
-        }
-    }
-    // =========================================================================
-
-    modified_packet
-}
-
-
-pub fn extract_full_transaction_key(packet: &str) -> Option<(String, String)> {
-    let call_id = extract_header_value(packet, "Call-ID")?;
-    let cseq_line = extract_header_value(packet, "CSeq")?;
-    Some((call_id, cseq_line))
-}
-
-// YENİ HELPER: Sadece başlığın değerini değil, tüm satırı bulan fonksiyon
-fn find_header_line<'a>(packet: &'a str, header_name: &str) -> Option<&'a str> {
-    let header_prefix = format!("{}:", header_name).to_lowercase();
-    packet.lines().find(|line| line.trim().to_lowercase().starts_with(&header_prefix))
-}
-
+// --- Yardımcı Fonksiyonlar ---
 
 pub fn extract_header_value(packet: &str, header_name: &str) -> Option<String> {
-    find_header_line(packet, header_name)
+    packet
+        .lines()
+        .find(|line| line.trim().to_lowercase().starts_with(&format!("{}:", header_name.to_lowercase())))
         .and_then(|line| line.split_once(':'))
         .map(|(_, value)| value.trim().to_string())
 }
-
 
 pub fn extract_transaction_key(packet: &str) -> Option<(String, String)> {
     let call_id = extract_header_value(packet, "Call-ID")?;
@@ -132,10 +107,4 @@ fn extract_branch_from_via(via_header: &str) -> Option<String> {
     via_header.split(';').find(|part| part.trim().starts_with("branch="))
         .and_then(|part| part.split('=').nth(1))
         .map(|s| s.to_string())
-}
-
-fn extract_user_from_uri(uri: &str) -> Option<String> {
-    uri.split_once("sip:")
-       .and_then(|(_, rest)| rest.split_once('@'))
-       .map(|(user, _)| user.trim_start_matches('<').to_string())
 }

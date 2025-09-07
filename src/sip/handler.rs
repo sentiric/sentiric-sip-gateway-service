@@ -1,8 +1,12 @@
-// File: sentiric-sip-gateway-service/src/sip/handler.rs
+// File: src/sip/handler.rs
+
 use crate::config::AppConfig;
-use crate::sip::processor::{self, extract_full_transaction_key, extract_transaction_key};
+use crate::sip::message::SipMessage;
+use crate::sip::message_builder::OutboundRequestBuilder; // YENİ
+use crate::sip::processor::{self, extract_transaction_key};
 use crate::sip::transaction::{TransactionInfo, Transactions};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::net::UdpSocket;
@@ -27,116 +31,141 @@ pub async fn handle_packet(
     transactions: &Transactions,
     config: &Arc<AppConfig>,
 ) {
-    if let Some((call_id, cseq_line)) = extract_full_transaction_key(packet_str) {
-        Span::current().record("call_id", &call_id);
-        Span::current().record("cseq", &cseq_line);
+    let msg = match SipMessage::parse(packet_str) {
+        Some(m) => m,
+        None => {
+            warn!("Gelen SIP paketi ayrıştırılamadı, atlanıyor.");
+            return;
+        }
+    };
+    
+    if let Some(call_id) = msg.headers.get("Call-ID") {
+        Span::current().record("call_id", call_id);
+    }
+    if let Some(cseq) = msg.headers.get("CSeq") {
+        Span::current().record("cseq", cseq);
     }
 
-    if packet_str.starts_with("SIP/2.0") {
+    if msg.start_line.starts_with("SIP/2.0") {
         Span::current().record("direction", "response");
         handle_response(packet_str, remote_addr, sock, transactions, config).await;
     } else {
+        let method = msg.start_line.split_whitespace().next().unwrap_or("UNKNOWN");
+        Span::current().record("method", method);
         Span::current().record("direction", "request");
-        handle_request(packet_str, remote_addr, sock, transactions, config).await;
+        handle_request(&msg, remote_addr, sock, transactions, config).await;
     }
 }
 
 async fn handle_request(
-    packet_str: &str,
+    msg: &SipMessage,
     remote_addr: SocketAddr,
     sock: &Arc<UdpSocket>,
     transactions: &Transactions,
     config: &Arc<AppConfig>,
 ) {
-    let method = packet_str.split_whitespace().next().unwrap_or("UNKNOWN");
-    Span::current().record("method", &method);
-
-    let is_internal_request = match remote_addr.ip() {
-        IpAddr::V4(ipv4) => ipv4.is_private() || ipv4.is_loopback(),
-        IpAddr::V6(ipv6) => ipv6.is_loopback(),
+    let is_internal_request = match SocketAddr::from_str(&config.target_addr) {
+        Ok(target_socket_addr) => remote_addr == target_socket_addr,
+        Err(_) => false,
     };
-    
-    let (call_id, cseq_method) = extract_transaction_key(packet_str).unwrap_or_default();
 
-    if is_internal_request && remote_addr.port() != config.listen_addr.port() {
+    if is_internal_request {
         info!("⬅️ Giden istek alındı (internal -> external)");
-        handle_outbound_request(packet_str, sock, transactions, config, call_id, cseq_method).await;
+        // --- GÜNCELLEME BAŞLANGICI: Artık bu fonksiyonu çağırıyoruz. ---
+        handle_outbound_request(msg, sock, transactions, config).await;
+        // --- GÜNCELLEME SONU ---
     } else {
         info!("➡️ Gelen istek alındı (external -> internal)");
-        handle_inbound_request(packet_str, remote_addr, sock, transactions, config, call_id, cseq_method).await;
+        handle_inbound_request(msg, remote_addr, sock, transactions, config).await;
     }
 }
 
+// --- YENİ EKLENEN/TAMAMLANAN FONKSİYON ---
+async fn handle_outbound_request(
+    msg: &SipMessage,
+    sock: &Arc<UdpSocket>,
+    transactions: &Transactions,
+    config: &Arc<AppConfig>,
+) {
+    let call_id = msg.headers.get("Call-ID");
+    let cseq_method = msg.start_line.split_whitespace().nth(0).unwrap_or_default();
+
+    if call_id.is_none() {
+        warn!("İç servisten Call-ID'siz giden istek geldi, atlanıyor.");
+        return;
+    }
+    let call_id_str = call_id.unwrap();
+
+    // Bu giden isteğin ait olduğu orijinal INVITE işlemini bulmalıyız.
+    let guard = transactions.lock().await;
+    if let Some(invite_tx) = guard.get(&(call_id_str.clone(), "INVITE".to_string())).cloned() {
+        drop(guard); // Kilidi erken bırak
+
+        let packet_str = &msg.start_line; // Sadece bir örnek, builder tüm mesajı almalı
+        
+        // OutboundRequestBuilder'ı kullanarak isteği yeniden oluştur
+        if let Some(builder) = OutboundRequestBuilder::new(packet_str, &invite_tx, config) {
+            let modified_packet = builder.build();
+            let target_addr = invite_tx.original_client_addr;
+
+            debug!(to = %target_addr, "Modifiye edilmiş giden istek operatöre yönlendiriliyor.");
+            if let Err(e) = sock.send_to(modified_packet.as_bytes(), target_addr).await {
+                error!(error = %e, target = %target_addr, "Giden istek operatöre yönlendirilemedi.");
+            }
+        } else {
+            error!("Giden istek için SipMessage parse edilemedi.");
+        }
+    } else {
+        warn!(call_id = %call_id_str, method = %cseq_method, "Giden istekle eşleşen aktif INVITE işlemi bulunamadı. İstek atlanıyor.");
+    }
+}
+// --- YENİ EKLENEN/TAMAMLANAN FONKSİYON SONU ---
 
 async fn handle_inbound_request(
-    packet_str: &str,
+    msg: &SipMessage,
     remote_addr: SocketAddr,
     sock: &Arc<UdpSocket>,
     transactions: &Transactions,
     config: &Arc<AppConfig>,
-    call_id: String,
-    cseq_method: String,
 ) {
-    if cseq_method == "INVITE" {
-        let guard = transactions.lock().await;
-        if guard.contains_key(&(call_id.clone(), cseq_method.clone())) {
-            debug!("Yinelenen INVITE isteği, atlanıyor.");
-            return;
-        }
-        drop(guard);
-    }
-
-    if let Some(modified_packet) = processor::rewrite_inbound_request(packet_str, remote_addr, config) {
-        if cseq_method == "INVITE" {
-            if let (Some(via), Some(contact)) = (processor::extract_header_value(packet_str, "Via"), processor::extract_header_value(packet_str, "Contact")) {
-                let record_route = processor::extract_header_value(packet_str, "Record-Route");
-                let mut guard = transactions.lock().await;
-                guard.insert(
-                    (call_id, cseq_method),
-                    TransactionInfo {
-                        original_client_addr: remote_addr,
-                        original_via_header: via,
-                        original_contact_header: contact,
-                        record_route_header: record_route,
-                        created_at: Instant::now(),
-                    },
-                );
+    let method = msg.start_line.split_whitespace().next().unwrap_or_default();
+    
+    if method == "INVITE" {
+        if let Some(call_id) = msg.headers.get("Call-ID") {
+            let guard = transactions.lock().await;
+            if guard.contains_key(&(call_id.clone(), "INVITE".to_string())) {
+                debug!("Yinelenen INVITE isteği, atlanıyor.");
+                return;
             }
         }
-        debug!(to = %config.target_addr, "Paket sinyal servisine yönlendiriliyor.");
-        if let Err(e) = sock.send_to(modified_packet.as_bytes(), &config.target_addr).await {
-            error!(error = %e, target = %config.target_addr, "Paket sinyal servisine yönlendirilemedi.");
+    }
+
+    let modified_packet = processor::rewrite_inbound_request(msg, remote_addr, config);
+    
+    if method == "INVITE" {
+        if let (Some(contact), Some(call_id), Some(_cseq)) = (msg.headers.get("Contact"), msg.headers.get("Call-ID"), msg.headers.get("CSeq")) {
+            let record_route = msg.headers.get("Record-Route").cloned();
+            let mut guard = transactions.lock().await;
+            guard.insert(
+                (call_id.clone(), "INVITE".to_string()),
+                TransactionInfo {
+                    original_client_addr: remote_addr,
+                    original_via_headers: msg.via_headers.clone(),
+                    original_contact_header: contact.clone(),
+                    record_route_header: record_route,
+                    created_at: Instant::now(),
+                },
+            );
         }
-    } else {
-        warn!("Gelen istek yeniden yazılamadı (başlıklar eksik olabilir).");
+    }
+    
+    debug!(to = %config.target_addr, "Paket sinyal servisine yönlendiriliyor.");
+    if let Err(e) = sock.send_to(modified_packet.as_bytes(), &config.target_addr).await {
+        error!(error = %e, target = %config.target_addr, "Paket sinyal servisine yönlendirilemedi.");
     }
 }
 
-// =========================================================================
-//   İŞTE DÜZELTME BURADA: `UpSocket` -> `UdpSocket`
-// =========================================================================
-async fn handle_outbound_request(
-    packet_str: &str,
-    sock: &Arc<UdpSocket>,
-    transactions: &Transactions,
-    config: &Arc<AppConfig>,
-    call_id: String,
-    cseq_method: String,
-) {
-    let mut guard = transactions.lock().await;
-    if let Some(invite_tx) = guard.get(&(call_id.clone(), "INVITE".to_string())).cloned() {
-        let modified_packet = processor::rewrite_outbound_request(packet_str, &invite_tx, config);
-        let target_addr = invite_tx.original_client_addr;
-        guard.insert((call_id, cseq_method), invite_tx);
-        drop(guard);
-        debug!(to = %target_addr, "Modifiye edilmiş giden istek telekoma yönlendiriliyor.");
-        if let Err(e) = sock.send_to(modified_packet.as_bytes(), target_addr).await {
-            error!(error = %e, target = %target_addr, "Giden istek telekoma yönlendirilemedi.");
-        }
-    } else {
-        warn!(call_id = %call_id, "Giden istekle eşleşen aktif INVITE işlemi bulunamadı. İstek atlanıyor.");
-    }
-}
+
 
 async fn handle_response(
     packet_str: &str,
@@ -149,24 +178,15 @@ async fn handle_response(
     if let Some((call_id, cseq_method)) = extract_transaction_key(packet_str) {
         Span::current().record("method", &cseq_method as &str);
         
-        if response_line.contains(" 200 OK") {
-            info!("⬅️ Başarılı yanıt (200 OK) alındı.");
-        } else if let Some(code) = response_line.split_whitespace().nth(1) {
-             if code.starts_with('4') || code.starts_with('5') || code.starts_with('6') {
-                 warn!(response_line = %response_line, "Hata yanıtı alındı.");
-             }
-        }
-        
         let tx_key = (call_id, cseq_method.clone());
         let guard = transactions.lock().await;
         if let Some(tx_info) = guard.get(&tx_key) {
-            let modified_packet = processor::rewrite_outbound_response(packet_str, &tx_info.original_via_header, config);
+            let modified_packet = processor::rewrite_outbound_response(packet_str, tx_info, config);
             let target_addr = tx_info.original_client_addr;
             drop(guard);
             if let Err(e) = sock.send_to(modified_packet.as_bytes(), target_addr).await {
                 error!(error = %e, "Yanıt istemciye yönlendirilemedi.");
             }
-            // 4xx, 5xx, 6xx serisi hatalarda da işlemi sonlandır
             if cseq_method == "BYE" || cseq_method == "CANCEL" || response_line.contains(" 4") || response_line.contains(" 5") || response_line.contains(" 6") {
                 let mut guard = transactions.lock().await;
                 debug!("İşlem tamamlandı, ilgili kayıtlar siliniyor.");

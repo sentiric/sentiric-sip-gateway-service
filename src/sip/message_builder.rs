@@ -1,111 +1,73 @@
 // File: src/sip/message_builder.rs
+
 use crate::config::AppConfig;
+use crate::sip::message::SipMessage;
 use crate::sip::transaction::TransactionInfo;
 use rand::Rng;
+use tracing::instrument;
 
-pub struct MessageBuilder<'a> {
-    lines: Vec<String>,
-    invite_tx: &'a TransactionInfo,
+/// İç ağdan gelen bir isteği, dış dünyaya gönderilecek formata dönüştüren yapı.
+pub struct OutboundRequestBuilder<'a> {
+    msg: SipMessage,
+    tx_info: &'a TransactionInfo,
     config: &'a AppConfig,
 }
 
-impl<'a> MessageBuilder<'a> {
-    pub fn new(packet_str: &str, invite_tx: &'a TransactionInfo, config: &'a AppConfig) -> Self {
-        Self {
-            lines: packet_str.lines().map(String::from).collect(),
-            invite_tx,
-            config,
-        }
+impl<'a> OutboundRequestBuilder<'a> {
+    pub fn new(
+        packet_str: &str,
+        tx_info: &'a TransactionInfo,
+        config: &'a AppConfig,
+    ) -> Option<Self> {
+        SipMessage::parse(packet_str).map(|msg| Self { msg, tx_info, config })
     }
 
-    pub fn build_outbound_request(mut self) -> String {
-        if self.lines.is_empty() {
-            return String::new();
+    /// `BYE` veya `CANCEL` gibi diyalog içi bir isteği yeniden oluşturur.
+    #[instrument(name="build_outbound_request", skip(self))]
+    pub fn build(mut self) -> String {
+        // 1. Route başlığını ekle (en kritik adım)
+        // Saklanan Record-Route başlığını, Route başlığı olarak ekliyoruz.
+        if let Some(record_route) = &self.tx_info.record_route_header {
+            self.msg.headers.insert("Route".to_string(), record_route.clone());
         }
-        let method = self.get_method();
 
-        // Route başlığına dokunmuyoruz, signaling'den geldiği gibi iletiyoruz.
-        // Bu, 'trasport' hatasının signaling'de düzeltilip doğru iletilmesini sağlar.
+        // 2. Via başlığını yeniden yaz
+        self.rewrite_via();
 
-        // Via başlığını sıfırdan oluştur.
-        self.rewrite_via_header();
+        // 3. Contact başlığını temizle (BYE/CANCEL'da olmamalı)
+        self.msg.headers.remove("Contact");
 
-        // =========================================================================
-        //   KRİTİK DÜZELTME: BYE veya CANCEL isteklerine Contact ekleme!
-        // =========================================================================
-        if method != "BYE" && method != "CANCEL" {
-            // Contact başlığını sadece diyalog başlatan istekler için (örn: INVITE)
-            // veya diyalog dışı istekler için (örn: REGISTER, OPTIONS) yeniden yaz.
-            self.rewrite_contact_header();
-        } else {
-            // BYE ve CANCEL'da Contact başlığı olmamalıdır.
-            // Gelen pakette varsa bile temizleyelim.
-            self.lines.retain(|line| !line.to_lowercase().starts_with("contact:"));
+        // 4. Max-Forwards'ı standart değere ayarla
+        self.msg.headers.insert("Max-Forwards".to_string(), "70".to_string());
+
+        // 5. User-Agent başlığını ekle/güncelle
+        self.msg.headers.insert("User-Agent".to_string(), format!("Sentiric Gateway v{}", self.config.service_version));
+
+        // 6. Content-Length'i sıfırla
+        self.msg.headers.insert("Content-Length".to_string(), "0".to_string());
+
+        // 7. Mesajı yeniden birleştir
+        let mut new_lines = vec![self.msg.start_line];
+        new_lines.extend(self.msg.via_headers); // Zaten tek bir tane olmalı
+        for (key, value) in self.msg.headers {
+            new_lines.push(format!("{}: {}", key, value));
         }
-        
-        // =========================================================================
-        //   YAPILACAK EKLEME BURASI
-        //   Giden tüm isteklere kendi User-Agent başlığımızı ekleyelim.
-        // =========================================================================
-        let user_agent = format!("User-Agent: Sentiric Gateway Service v{}", self.config.service_version);
-        self.replace_or_add_header("User-Agent", &user_agent);
-        // =========================================================================
+        new_lines.push(String::new()); // Boş satır
 
-        self.set_header("Max-Forwards", "70");
-        self.ensure_content_length(&method);
-        
-        self.finalize()
+        new_lines.join("\r\n") + "\r\n"
     }
 
-    fn get_method(&self) -> String {
-        self.lines
-            .first()
-            .and_then(|line| line.split_whitespace().next())
-            .map(String::from)
-            .unwrap_or_else(|| "UNKNOWN".to_string())
-    }
-    
-    fn rewrite_via_header(&mut self) {
+    fn rewrite_via(&mut self) {
         let branch: String = rand::thread_rng()
             .sample_iter(&rand::distributions::Alphanumeric)
             .take(16)
             .map(char::from)
             .collect();
         let new_via = format!(
-            "Via: SIP/2.0/UDP {}:{};branch=z9hG4bK.{}", 
-            self.config.public_ip, 
-            self.config.public_port, 
-            branch
+            "Via: SIP/2.0/UDP {}:{};branch=z9hG4bK.{}",
+            self.config.public_ip, self.config.public_port, branch
         );
-        self.replace_or_add_header("Via", &new_via);
-    }
-
-    fn rewrite_contact_header(&mut self) {
-        let new_contact = format!("Contact: <sip:sentiric@{}:{}>", self.config.public_ip, self.config.public_port);
-        self.replace_or_add_header("Contact", &new_contact);
-    }
-
-    fn ensure_content_length(&mut self, method: &str) {
-        if method == "BYE" || method == "CANCEL" {
-            self.set_header("Content-Length", "0");
-        }
-    }
-    
-    fn set_header(&mut self, header_name: &str, value: &str) {
-        let new_header = format!("{}: {}", header_name, value);
-        self.replace_or_add_header(header_name, &new_header);
-    }
-
-    fn replace_or_add_header(&mut self, header_name: &str, new_header_line: &str) {
-        let lower_header_name = header_name.to_lowercase();
-        if let Some(pos) = self.lines.iter().position(|l| l.to_lowercase().starts_with(&format!("{}:", lower_header_name))) {
-            self.lines[pos] = new_header_line.to_string();
-        } else if let Some(pos) = self.lines.iter().position(|l| l.to_lowercase().starts_with("cseq:")) {
-            self.lines.insert(pos + 1, new_header_line.to_string());
-        }
-    }
-
-    fn finalize(self) -> String {
-        self.lines.join("\r\n") + "\r\n\r\n"
+        // Var olan tek Via'yı bizimkiyle değiştiriyoruz.
+        self.msg.via_headers = vec![new_via];
     }
 }
