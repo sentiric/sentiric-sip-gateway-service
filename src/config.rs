@@ -23,19 +23,19 @@ impl AppConfig {
         dotenvy::dotenv().ok();
 
         let env = env::var("ENV").unwrap_or_else(|_| "production".to_string());
-        let listen_port_str = env::var("SIP_GATEWAY_LISTEN_PORT").unwrap_or_else(|_| "5060".to_string());
-        let listen_port = listen_port_str.parse::<u16>().map_err(|_| GatewayError::ConfigError("Geçersiz SIP_GATEWAY_LISTEN_PORT".to_string()))?;
+        let listen_port_str = env::var("SIP_GATEWAY_UDP_PORT").unwrap_or_else(|_| "13014".to_string());
+        let listen_port = listen_port_str.parse::<u16>().map_err(|_| GatewayError::ConfigError("Geçersiz SIP_GATEWAY_UDP_PORT".to_string()))?;
         
-        let target_host = env::var("SIP_SIGNALING_SERVICE_HOST").map_err(|_| GatewayError::ConfigError("ZORUNLU: SIP_SIGNALING_SERVICE_HOST eksik".to_string()))?;
-        let target_port = env::var("SIP_SIGNALING_SERVICE_PORT").map_err(|_| GatewayError::ConfigError("ZORUNLU: SIP_SIGNALING_SERVICE_PORT eksik".to_string()))?;
+        let target_host = env::var("SIP_SIGNALING_HOST").map_err(|_| GatewayError::ConfigError("ZORUNLU: SIP_SIGNALING_HOST eksik".to_string()))?;
+        let target_port = env::var("SIP_SIGNALING_UDP_PORT").map_err(|_| GatewayError::ConfigError("ZORUNLU: SIP_SIGNALING_UDP_PORT eksik".to_string()))?;
         
         // --- DEĞİŞİKLİK BURADA ---
         // Artık parse etmiyoruz, direkt string olarak birleştiriyoruz.
         let target_addr = format!("{}:{}", target_host, target_port);
         // --- DEĞİŞİKLİK SONU ---
 
-        let public_ip_str = env::var("PUBLIC_IP").map_err(|_| GatewayError::ConfigError("ZORUNLU: PUBLIC_IP (gateway'in genel IP'si) eksik".to_string()))?;
-        let public_ip = public_ip_str.parse::<IpAddr>().map_err(|_| GatewayError::ConfigError(format!("Geçersiz PUBLIC_IP adresi: {}", public_ip_str)))?;
+        let public_ip_str = env::var("SIP_GATEWAY_IPV4_EXTERNAL_ADDRESS").map_err(|_| GatewayError::ConfigError("ZORUNLU: SIP_GATEWAY_IPV4_EXTERNAL_ADDRESS (gateway'in genel IP'si) eksik".to_string()))?;
+        let public_ip = public_ip_str.parse::<IpAddr>().map_err(|_| GatewayError::ConfigError(format!("Geçersiz SIP_GATEWAY_IPV4_EXTERNAL_ADDRESS adresi: {}", public_ip_str)))?;
 
         let listen_addr_str = format!("0.0.0.0:{}", listen_port);
         let listen_addr = listen_addr_str.parse::<SocketAddr>().unwrap();

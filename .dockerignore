@@ -31,4 +31,5 @@ Cargo.lock # (duruma göre, açıklaması aşağıda)
 
 # Docker-compose vs.
 docker-compose.yml
+docker-compose.service.yml
 docker-compose.override.yml

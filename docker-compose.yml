@@ -1,5 +1,5 @@
-# docker-compose.service.yml
-# Service Geliştirme ortamı
+# docker-compose.yml
+# Service Üretim ortamı
 
 networks:
   sentiric-net:
@@ -16,7 +16,7 @@ services:
 
   # sadece geçit olarak kullanılacak ise
   sip-gateway:
-    build: { context: ../sentiric-sip-gateway-service }
+    image: ghcr.io/sentiric/sentiric-sip-gateway-service:${TAG:-latest}
     env_file: ["${ENV_FILE_PATH}"]
     ports: 
       - "5060:${SIP_GATEWAY_UDP_PORT:-13014}/udp"
@@ -26,4 +26,4 @@ services:
     restart: always
     # depends_on: {
     #   sip-signaling: { condition: service_started }
-    # }
+    # }  
