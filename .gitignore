@@ -22,6 +22,11 @@ target
 
 # Ortam değişkenleri
 .env
+.env.*
+!.env.example
+.profile.state
+.env.generated
+node_modules
 
 # Loglar
 *.log
