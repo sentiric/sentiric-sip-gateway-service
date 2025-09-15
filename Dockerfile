@@ -20,7 +20,12 @@ RUN cargo build --release
 # --- STAGE 2: Final ---
 FROM debian:bookworm-slim
 
-RUN apt-get update
+# --- Çalışma zamanı sistem bağımlılıkları ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    netcat-openbsd \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* 
 
 WORKDIR /app
 
