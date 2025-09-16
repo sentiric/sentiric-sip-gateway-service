@@ -1,4 +1,4 @@
-// File: src/sip/handler.rs
+// sentiric-sip-gateway-service/src/sip/handler.rs
 
 use crate::config::AppConfig;
 use crate::sip::message::SipMessage;
@@ -25,7 +25,7 @@ use tracing::{debug, error, info, instrument, warn, Span};
     )
 )]
 pub async fn handle_packet(
-    packet_str: &str,
+    packet_str: &str, // << Bu 'packet_str' bizim için anahtar
     remote_addr: SocketAddr,
     sock: &Arc<UdpSocket>,
     transactions: &Transactions,
@@ -53,11 +53,15 @@ pub async fn handle_packet(
         let method = msg.start_line.split_whitespace().next().unwrap_or("UNKNOWN");
         Span::current().record("method", method);
         Span::current().record("direction", "request");
-        handle_request(&msg, remote_addr, sock, transactions, config).await;
+        
+        // --- DEĞİŞİKLİK BURADA: 'packet_str'ı da iletiyoruz --- Daha önce &msg yi iletiyorduk?
+        handle_request(packet_str, &msg, remote_addr, sock, transactions, config).await;
     }
 }
 
+// --- DEĞİŞİKLİK BURADA: Fonksiyon imzası değişti ---
 async fn handle_request(
+    packet_str: &str, // Orijinal ham paket metni
     msg: &SipMessage,
     remote_addr: SocketAddr,
     sock: &Arc<UdpSocket>,
@@ -71,39 +75,45 @@ async fn handle_request(
 
     if is_internal_request {
         info!("⬅️ Giden istek alındı (internal -> external)");
-        // --- GÜNCELLEME BAŞLANGICI: Artık bu fonksiyonu çağırıyoruz. ---
-        handle_outbound_request(msg, sock, transactions, config).await;
-        // --- GÜNCELLEME SONU ---
+        // --- DEĞİŞİKLİK BURADA: 'packet_str'ı iletiyoruz, 'msg' yerine ---
+        handle_outbound_request(packet_str, sock, transactions, config).await;
     } else {
         info!("➡️ Gelen istek alındı (external -> internal)");
         handle_inbound_request(msg, remote_addr, sock, transactions, config).await;
     }
 }
 
-// --- YENİ EKLENEN/TAMAMLANAN FONKSİYON ---
+// --- DEĞİŞİKLİK BURADA: Fonksiyon imzası ve iç mantığı değişti ---
 async fn handle_outbound_request(
-    msg: &SipMessage,
+    packet_str: &str, // Artık 'SipMessage' yerine ham metni alıyoruz
     sock: &Arc<UdpSocket>,
     transactions: &Transactions,
     config: &Arc<AppConfig>,
 ) {
-    let call_id = msg.headers.get("Call-ID");
-    let cseq_method = msg.start_line.split_whitespace().nth(0).unwrap_or_default();
-
-    if call_id.is_none() {
-        warn!("İç servisten Call-ID'siz giden istek geldi, atlanıyor.");
-        return;
-    }
-    let call_id_str = call_id.unwrap();
+    // Ham metinden Call-ID ve CSeq Method'u çıkarmamız gerekiyor.
+    // Bunun için processor modülündeki yardımcı fonksiyonu kullanabiliriz.
+    let (call_id, cseq_method) = match processor::extract_transaction_key(packet_str) {
+        Some((cid, cmethod)) => (cid, cmethod),
+        None => {
+            warn!("İç servisten Call-ID veya CSeq'siz giden istek geldi, atlanıyor.");
+            return;
+        }
+    };
 
     // Bu giden isteğin ait olduğu orijinal INVITE işlemini bulmalıyız.
+    // Giden istek bir BYE ise, anahtar "INVITE" olmalıdır.
+    let tx_key = if cseq_method == "BYE" || cseq_method == "CANCEL" {
+        (call_id.clone(), "INVITE".to_string())
+    } else {
+        (call_id.clone(), cseq_method.clone())
+    };
+
     let guard = transactions.lock().await;
-    if let Some(invite_tx) = guard.get(&(call_id_str.clone(), "INVITE".to_string())).cloned() {
+    if let Some(invite_tx) = guard.get(&tx_key).cloned() {
         drop(guard); // Kilidi erken bırak
 
-        let packet_str = &msg.start_line; // Sadece bir örnek, builder tüm mesajı almalı
-        
         // OutboundRequestBuilder'ı kullanarak isteği yeniden oluştur
+        // Artık tam `packet_str`'ı veriyoruz.
         if let Some(builder) = OutboundRequestBuilder::new(packet_str, &invite_tx, config) {
             let modified_packet = builder.build();
             let target_addr = invite_tx.original_client_addr;
@@ -113,13 +123,13 @@ async fn handle_outbound_request(
                 error!(error = %e, target = %target_addr, "Giden istek operatöre yönlendirilemedi.");
             }
         } else {
+            // Bu hata artık `SipMessage::parse` başarılı olduğu sürece oluşmamalı.
             error!("Giden istek için SipMessage parse edilemedi.");
         }
     } else {
-        warn!(call_id = %call_id_str, method = %cseq_method, "Giden istekle eşleşen aktif INVITE işlemi bulunamadı. İstek atlanıyor.");
+        warn!(call_id = %call_id, method = %cseq_method, "Giden istekle eşleşen aktif INVITE işlemi bulunamadı. İstek atlanıyor.");
     }
 }
-// --- YENİ EKLENEN/TAMAMLANAN FONKSİYON SONU ---
 
 async fn handle_inbound_request(
     msg: &SipMessage,
