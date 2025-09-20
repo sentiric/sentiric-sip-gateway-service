@@ -25,7 +25,7 @@ use tracing::{debug, error, info, instrument, warn, Span};
     )
 )]
 pub async fn handle_packet(
-    packet_str: &str, // << Bu 'packet_str' bizim için anahtar
+    packet_str: &str, 
     remote_addr: SocketAddr,
     sock: &Arc<UdpSocket>,
     transactions: &Transactions,
@@ -54,14 +54,13 @@ pub async fn handle_packet(
         Span::current().record("method", method);
         Span::current().record("direction", "request");
         
-        // --- DEĞİŞİKLİK BURADA: 'packet_str'ı da iletiyoruz --- Daha önce &msg yi iletiyorduk?
         handle_request(packet_str, &msg, remote_addr, sock, transactions, config).await;
     }
 }
 
-// --- DEĞİŞİKLİK BURADA: Fonksiyon imzası değişti ---
+// --- DEĞİŞİKLİK BURADA: Fonksiyon artık iç/dış istekleri ayırt ediyor ---
 async fn handle_request(
-    packet_str: &str, // Orijinal ham paket metni
+    packet_str: &str, 
     msg: &SipMessage,
     remote_addr: SocketAddr,
     sock: &Arc<UdpSocket>,
@@ -75,7 +74,6 @@ async fn handle_request(
 
     if is_internal_request {
         info!("⬅️ Giden istek alındı (internal -> external)");
-        // --- DEĞİŞİKLİK BURADA: 'packet_str'ı iletiyoruz, 'msg' yerine ---
         handle_outbound_request(packet_str, sock, transactions, config).await;
     } else {
         info!("➡️ Gelen istek alındı (external -> internal)");
@@ -83,15 +81,13 @@ async fn handle_request(
     }
 }
 
-// --- DEĞİŞİKLİK BURADA: Fonksiyon imzası ve iç mantığı değişti ---
+// --- YENİ FONKSİYON: İçeriden gelen istekleri işler ---
 async fn handle_outbound_request(
-    packet_str: &str, // Artık 'SipMessage' yerine ham metni alıyoruz
+    packet_str: &str, 
     sock: &Arc<UdpSocket>,
     transactions: &Transactions,
     config: &Arc<AppConfig>,
 ) {
-    // Ham metinden Call-ID ve CSeq Method'u çıkarmamız gerekiyor.
-    // Bunun için processor modülündeki yardımcı fonksiyonu kullanabiliriz.
     let (call_id, cseq_method) = match processor::extract_transaction_key(packet_str) {
         Some((cid, cmethod)) => (cid, cmethod),
         None => {
@@ -100,8 +96,6 @@ async fn handle_outbound_request(
         }
     };
 
-    // Bu giden isteğin ait olduğu orijinal INVITE işlemini bulmalıyız.
-    // Giden istek bir BYE ise, anahtar "INVITE" olmalıdır.
     let tx_key = if cseq_method == "BYE" || cseq_method == "CANCEL" {
         (call_id.clone(), "INVITE".to_string())
     } else {
@@ -110,10 +104,8 @@ async fn handle_outbound_request(
 
     let guard = transactions.lock().await;
     if let Some(invite_tx) = guard.get(&tx_key).cloned() {
-        drop(guard); // Kilidi erken bırak
+        drop(guard); 
 
-        // OutboundRequestBuilder'ı kullanarak isteği yeniden oluştur
-        // Artık tam `packet_str`'ı veriyoruz.
         if let Some(builder) = OutboundRequestBuilder::new(packet_str, &invite_tx, config) {
             let modified_packet = builder.build();
             let target_addr = invite_tx.original_client_addr;
@@ -123,7 +115,6 @@ async fn handle_outbound_request(
                 error!(error = %e, target = %target_addr, "Giden istek operatöre yönlendirilemedi.");
             }
         } else {
-            // Bu hata artık `SipMessage::parse` başarılı olduğu sürece oluşmamalı.
             error!("Giden istek için SipMessage parse edilemedi.");
         }
     } else {
