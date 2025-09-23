@@ -8,8 +8,9 @@ pub enum GatewayError {
     #[error("UDP soketi '{addr}' adresine bağlanamadı: {source}")]
     SocketBindError { addr: SocketAddr, source: std::io::Error },
 
-    #[error("Yapılandırma hatası: {0}")]
-    ConfigError(String),
+    // DÜZELTME: Bu varyant artık kullanılmadığı için kaldırıldı.
+    // #[error("Yapılandırma hatası: {0}")]
+    // ConfigError(String),
 
     #[error("UDP soketinden okuma hatası: {0}")]
     SocketReadError(#[from] std::io::Error),

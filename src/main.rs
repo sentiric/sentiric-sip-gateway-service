@@ -1,7 +1,10 @@
 // sentiric-sip-gateway-service/src/main.rs
 use anyhow::Result;
-use sentiric_sip_gateway_service::app::App;
+// DÜZELTME: Kendi crate'imiz içindeki bir modüle erişmek için 'crate::' kullanılır.
+use crate::app::App;
 
+// DÜZELTME: Derleyicinin projedeki diğer modülleri bulabilmesi için
+// ana dosyada (main.rs) bildirimleri yapılmalıdır.
 mod app;
 mod config;
 mod error;
@@ -10,7 +13,5 @@ mod sip;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Uygulamanın başlatılması ve çalıştırılması sorumluluğu
-    // tamamen 'app' modülüne devredildi.
     App::bootstrap().await?.run().await
 }
