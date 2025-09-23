@@ -1,4 +1,4 @@
-// File: src/config.rs (DÜZELTİLMİŞ)
+// File: src/config.rs
 use crate::error::GatewayError;
 use std::env;
 use std::net::{IpAddr, SocketAddr};
@@ -6,10 +6,7 @@ use std::net::{IpAddr, SocketAddr};
 #[derive(Debug)]
 pub struct AppConfig {
     pub listen_addr: SocketAddr,
-    // --- DEĞİŞİKLİK BURADA ---
-    // SocketAddr yerine String olarak saklayacağız.
     pub target_addr: String, 
-    // --- DEĞİŞİKLİK SONU ---
     pub public_ip: IpAddr,
     pub public_port: u16,
     pub env: String,
@@ -23,19 +20,25 @@ impl AppConfig {
         dotenvy::dotenv().ok();
 
         let env = env::var("ENV").unwrap_or_else(|_| "production".to_string());
-        let listen_port_str = env::var("SIP_GATEWAY_UDP_PORT").unwrap_or_else(|_| "13014".to_string());
-        let listen_port = listen_port_str.parse::<u16>().map_err(|_| GatewayError::ConfigError("Geçersiz SIP_GATEWAY_UDP_PORT".to_string()))?;
         
-        let target_host = env::var("SIP_SIGNALING_HOST").map_err(|_| GatewayError::ConfigError("ZORUNLU: SIP_SIGNALING_HOST eksik".to_string()))?;
-        let target_port = env::var("SIP_SIGNALING_UDP_PORT").map_err(|_| GatewayError::ConfigError("ZORUNLU: SIP_SIGNALING_UDP_PORT eksik".to_string()))?;
+        // Kendi dinleyeceği portu okur.
+        let listen_port_str = env::var("SIP_GATEWAY_UDP_PORT")
+            .unwrap_or_else(|_| "13014".to_string());
+        let listen_port = listen_port_str.parse::<u16>()
+            .map_err(|_| GatewayError::ConfigError("Geçersiz SIP_GATEWAY_UDP_PORT".to_string()))?;
         
-        // --- DEĞİŞİKLİK BURADA ---
-        // Artık parse etmiyoruz, direkt string olarak birleştiriyoruz.
-        let target_addr = format!("{}:{}", target_host, target_port);
-        // --- DEĞİŞİKLİK SONU ---
-
-        let public_ip_str = env::var("SIP_GATEWAY_IPV4_EXTERNAL_ADDRESS").map_err(|_| GatewayError::ConfigError("ZORUNLU: SIP_GATEWAY_IPV4_EXTERNAL_ADDRESS (gateway'in genel IP'si) eksik".to_string()))?;
-        let public_ip = public_ip_str.parse::<IpAddr>().map_err(|_| GatewayError::ConfigError(format!("Geçersiz SIP_GATEWAY_IPV4_EXTERNAL_ADDRESS adresi: {}", public_ip_str)))?;
+        // --- KRİTİK DEĞİŞİKLİK ---
+        // Artık `_HOST` ve `_PORT`'u ayrı ayrı birleştirmek yerine, 
+        // doğrudan `service.env`'de oluşturulmuş nihai HEDEF adresini okur.
+        let target_addr = env::var("SIP_SIGNALING_TARGET_UDP_URL")
+            .map_err(|_| GatewayError::ConfigError("ZORUNLU: SIP_SIGNALING_TARGET_UDP_URL eksik".to_string()))?;
+        
+        // Dış dünyaya göstereceği PUBLIC IP'yi okur.
+        let public_ip_str = env::var("SIP_GATEWAY_PUBLIC_IP")
+            .map_err(|_| GatewayError::ConfigError("ZORUNLU: SIP_GATEWAY_PUBLIC_IP (gateway'in genel IP'si) eksik".to_string()))?;
+        let public_ip = public_ip_str.parse::<IpAddr>()
+            .map_err(|_| GatewayError::ConfigError(format!("Geçersiz SIP_GATEWAY_PUBLIC_IP adresi: {}", public_ip_str)))?;
+        // --- DEĞİŞİKLİK SONA ERDİ ---
 
         let listen_addr_str = format!("0.0.0.0:{}", listen_port);
         let listen_addr = listen_addr_str.parse::<SocketAddr>().unwrap();
