@@ -30,28 +30,10 @@ Bu servis, basit bir proxy'den çok daha fazlasıdır; bir **Oturum Sınır Dene
 
 ## 🚀 Yerel Geliştirme
 
-1.  **`.env` Dosyasını Oluşturun:** Projenin kök dizininde `.env` adında bir dosya oluşturun ve aşağıdaki değişkenleri kendi ortamınıza göre düzenleyin:
-    ```env
-    # .env
-    ENV=development
-    RUST_LOG=info,sentiric_sip_gateway_service=debug
+1.  **Bağımlılıkları Yükleyin:**
+2.  **Ortam Değişkenlerini Ayarlayın:** `.env.example` dosyasını `.env` olarak kopyalayın ve gerekli değişkenleri doldurun.
+3.  **Servisi Çalıştırın:**
 
-    # Hedef sinyal servisinin adresi
-    SIP_SIGNALING_SERVICE_HOST=localhost
-    SIP_SIGNALING_SERVICE_PORT=5061
-
-    # Gateway'in dinleyeceği port
-    SIP_GATEWAY_LISTEN_PORT=5060
-    
-    # !! EN KRİTİK AYAR !!
-    # Bu, telekom operatörünün göreceği genel IP adresinizdir.
-    PUBLIC_IP=192.168.1.100 
-    ```
-
-2.  **Servisi Çalıştırın:**
-    ```bash
-    cargo run --release
-    ```
 ---
 ## 🏛️ Anayasal Konum
 
