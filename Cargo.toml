@@ -11,4 +11,4 @@ dotenvy = "0.15"
 anyhow = "1.0"
 thiserror = "1.0"
 rand = "0.8"
-hyper = { version = "0.14", features = ["server", "http1"] }
+hyper = { version = "0.14", features = ["full"] }

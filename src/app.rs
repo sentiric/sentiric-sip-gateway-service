@@ -20,7 +20,12 @@ pub struct App {
 }
 
 async fn health_check_handler(_req: Request<Body>) -> Result<Response<Body>, Infallible> {
-    Ok(Response::new(Body::from(r#"{"status":"ok"}"#)))
+    // Sadece /healthz yolunu kontrol etmiyoruz, çünkü bu sunucu sadece o amaçla var.
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "application/json")
+        .body(Body::from(r#"{"status":"ok"}"#))
+        .unwrap())
 }
 
 fn spawn_http_server(config: Arc<AppConfig>) -> (JoinHandle<()>, tokio::sync::oneshot::Sender<()>) {
