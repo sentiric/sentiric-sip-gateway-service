@@ -1,13 +1,8 @@
-# 🛡️ Sentiric SIP Gateway Service - Görev Listesi (v3.1 - Stabilite)
+# 🛡️ Sentiric SIP Gateway Service - Görev Listesi
 
-Bu belge, `sip-gateway-service`'in geliştirme yol haritasını, tamamlanan önemli kilometre taşlarını ve gelecekteki hedeflerini tanımlar.
+Bu servisin mevcut ve gelecekteki tüm geliştirme görevleri, platformun merkezi görev yönetimi reposu olan **`sentiric-tasks`**'ta yönetilmektedir.
 
+➡️ **[Aktif Görev Panosuna Git](https://github.com/sentiric/sentiric-tasks/blob/main/TASKS.md)**
 
 ---
-### **Gelecek Fazlar**
-
--   [ ] **Görev ID: GW-PROTO-001 - WebRTC Entegrasyonu (SIP over WebSocket)**       
--   [ ] **Görev ID: GW-SEC-001 - Hız Sınırlama (Rate Limiting)**
--   [ ] **Görev ID: GW-SEC-002 - IP Beyaz/Kara Liste**
--   [ ] **Görev ID: GW-OBSERV-001 - Prometheus Metrikleri**
- 
+Bu belge, servise özel, çok küçük ve acil görevler için geçici bir not defteri olarak kullanılabilir.
